@@ -1,0 +1,3 @@
+[submodule "ThirdParty/VBBoot"]
+	path = ThirdParty/VBBoot
+	url = https://github.com/VBCores/VBBoot.git

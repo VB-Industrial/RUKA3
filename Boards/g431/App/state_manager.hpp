@@ -1,0 +1,285 @@
+#pragma once
+
+#include <voltbro/config/serial/serial.h>
+#include <voltbro/motors/bldc/vbdrive/vbdrive.hpp>
+
+#include <cstddef>
+#include "parameters.hpp"
+
+VBDrive* get_motor();
+void reboot_to_bootloader();
+bool parse_serial_number(std::string_view input, int& value);
+bool parse_serial_number(std::string_view input, float& value);
+
+namespace VBDriveDefaults {
+    inline constexpr float MAX_VOLTAGE = 50.0f;
+    inline constexpr uint8_t GEAR_RATIO = 36;
+    inline constexpr float TORQUE_CONST = 1.0f;
+    inline constexpr float ANGLE_OFFSET = 0.0f;
+    inline constexpr float PID_KP = 4.0f;
+    inline constexpr float PID_KI = 1600.0f;
+    inline constexpr float PID_KD = 0.0f;
+    inline constexpr float FILTER_A = 0.0f;
+    inline constexpr float FILTER_G1 = 0.015700989410003974f;
+    inline constexpr float FILTER_G2 = 3.925227776360174f;
+    inline constexpr float FILTER_G3 = 387.54711795263574f;
+    inline constexpr float I_LPF = 0.0925f;
+}  // namespace VBDriveDefaults
+
+inline constexpr uint32_t VBDRIVE_CONFIG_TYPE_ID = 0x44AAABFF;
+
+struct __attribute__((packed)) VBDriveConfig: public BaseConfigData {
+    static constexpr uint32_t TYPE_ID = VBDRIVE_CONFIG_TYPE_ID;
+    uint8_t gear_ratio = 0;
+    int32_t angle_direction = 1;
+    float max_current = NAN;
+    float max_torque = NAN;
+    float max_speed = NAN;
+    float angle_offset = NAN;
+    float min_angle = NAN;
+    float max_angle = NAN;
+    float torque_const = NAN;
+    float kp = NAN;
+    float ki = NAN;
+    float kd = NAN;
+    float filter_a = NAN;
+    float filter_g1 = NAN;
+    float filter_g2 = NAN;
+    float filter_g3 = NAN;
+    float I_lpf_coefficient = NAN;
+    AngleEncoderType angle_encoder = AngleEncoderType::ROTOR;
+
+    VBDriveConfig(): BaseConfigData() {
+        type_id = VBDriveConfig::TYPE_ID;
+        angle_encoder = AngleEncoderType::ROTOR;
+    }
+
+    bool are_required_params_set();
+
+    void print_self(UARTResponseAccumulator& responses);
+    void get(std::string_view param, UARTResponseAccumulator& responses);
+    bool set(std::string_view param, std::string_view value, UARTResponseAccumulator& responses, bool apply_runtime = false);
+};
+
+static_assert(sizeof(BaseConfigData) == 8);
+static_assert(offsetof(BaseConfigData, was_configured) == 0);
+static_assert(offsetof(BaseConfigData, node_id) == 1);
+static_assert(offsetof(BaseConfigData, fdcan_nominal_baud) == 2);
+static_assert(offsetof(BaseConfigData, fdcan_data_baud) == 3);
+static_assert(offsetof(BaseConfigData, type_id) == 4);
+
+constexpr size_t CONFIG_PLACEMENT = 0;
+constexpr size_t CALIBRATION_PLACEMENT = CONFIG_PLACEMENT + sizeof(VBDriveConfig) + 1;
+constexpr size_t IND_SENSOR_STATE_PLACEMENT = CALIBRATION_PLACEMENT + sizeof(CalibrationData) + 1;
+
+struct CommandState: AppState {
+    static constexpr AppStateT NOT_CALIBRATED{4};
+    static constexpr AppStateT CALIBRATING{5};
+    static constexpr AppStateT TESTING{6};
+};
+
+class DriveStateController: public AppConfigurator<CommandState, VBDriveConfig, CONFIG_PLACEMENT, std::string_view> {
+protected:
+    static constexpr std::string_view TEST_COMMAND = "TEST";
+    static constexpr std::string_view CALIBRATE_COMMAND = "CALIBRATE";
+    static constexpr std::string_view STOP_COMMAND = "STOP";
+    static constexpr std::string_view VEL_PARAM = "do_vel";
+    static constexpr std::string_view ANGLE_PARAM = "do_ang";
+    static constexpr std::string_view FREE_COMMAND = "do_free";
+    static constexpr std::string_view START_LOGGING_COMMAND = "log_on";
+    static constexpr std::string_view STOP_LOGGING_COMMAND = "log_off";
+
+    bool _is_logging = false;
+    CommandState::ValueT state_before_config = CommandState::INIT;
+    VBDriveConfig config_before_config;
+
+public:
+    using BaseConfigurator = AppConfigurator<CommandState, VBDriveConfig, CONFIG_PLACEMENT, std::string_view>;  // for brevity
+    using BaseConfigurator::AppConfigurator;  // inherit constructors
+    using BaseConfigurator::process_command;  // inherit base method
+
+    bool is_logging() {
+        return BaseConfigurator::app_state == CommandState::TESTING && _is_logging;
+    }
+
+    void send_message_blocking(const char* fmt, ...) {
+        size_t buffer_size = strlen(fmt) + 15;  // should be enough for param expansion
+        char buffer[buffer_size];
+
+        va_list args;
+        va_start(args, fmt);
+        int written = npf_vsnprintf(buffer, buffer_size, fmt, args);
+        va_end(args);
+
+        if (written == 0) {
+            return;
+        }
+
+        wait_for_uart();
+        HAL_UART_Transmit(huart, reinterpret_cast<uint8_t*>(buffer), written, 1000);
+    }
+
+    void set_calibration_finished() {
+        BaseConfigurator::app_state = CommandState::RUNNING;
+        char message[] = "Calibration finished\n\r\0";
+        send_message_blocking(message);
+    }
+
+    bool is_calibration_allowed() const {
+        return BaseConfigurator::app_state == CommandState::CALIBRATING;
+    }
+
+    bool is_app_running() const override {
+        return BaseConfigurator::is_app_running() || BaseConfigurator::app_state == CommandState::TESTING;
+    }
+
+    void process_command(std::string_view command, UARTResponseAccumulator& responses) override {
+        if (command == "BOOT") {
+            responses.append("Rebooting to bootloader\n\r");
+            wait_for_uart();
+            reboot_to_bootloader();
+            return;
+        }
+        auto values = BaseConfigurator::split_parameter(command);
+        if (values) {
+            auto [param, value] = *values;
+            if (value == "?") {
+                config_data.get(param, responses);
+                return;
+            }
+            const auto* definition = find_parameter(param);
+            if (definition && !definition->available_in_serial()) {
+                responses.append("ERROR: Unknown parameter\n\r");
+                return;
+            }
+            if (!definition && BaseConfigurator::app_state != CommandState::TESTING) {
+                responses.append("ERROR: Unknown parameter\n\r");
+                return;
+            }
+            if (definition && !definition->is_mutable) {
+                responses.append("ERROR: Read-only parameter\n\r");
+                return;
+            }
+            if (definition && !definition->is_persistent && definition->is_mutable) {
+                if (definition->id == ParameterId::IS_ON && BaseConfigurator::app_state != CommandState::RUNNING) {
+                    responses.append("ERROR: RUNNING mode required\n\r");
+                    return;
+                }
+                bool enabled = false;
+                if (value == "0") {
+                    enabled = false;
+                }
+                else if (value == "1") {
+                    enabled = true;
+                }
+                else {
+                    responses.append("ERROR: Invalid value\n\r");
+                    return;
+                }
+                ParameterValue parameter_value = enabled;
+                if (write_runtime_parameter(definition->id, parameter_value) == ParameterWriteResult::OK) {
+                    responses.append("OK: %s:%u\n\r", definition->name.data(), enabled ? 1U : 0U);
+                }
+                else {
+                    responses.append("ERROR: Parameter unavailable\n\r");
+                }
+                return;
+            }
+            if (definition && definition->is_persistent && BaseConfigurator::app_state != CommandState::CONFIG) {
+                if (app_state == CommandState::TESTING &&
+                    (param == "min_ang" || param == "max_ang" || param == "ang_off")) {
+                    do_save |= config_data.set(param, value, responses, true);
+                    return;
+                }
+                responses.append("ERROR: CONFIG mode required\n\r");
+                return;
+            }
+        }
+        if (BaseConfigurator::app_state == CommandState::RUNNING && command == TEST_COMMAND) {
+            BaseConfigurator::app_state = CommandState::TESTING;
+            responses.append("Entering TEST mode\n\r");
+            return;
+        }
+        if (BaseConfigurator::app_state == CommandState::TESTING) {
+            handle_testing_mode(command, responses);
+            return;
+        }
+        if (command == CONFIG_COMMAND) {
+            if (app_state == CommandState::CONFIG) {
+                responses.append("CONFIG MODE ENABLED\n\r");
+                return;
+            }
+            state_before_config = app_state;
+            config_before_config = config_data;
+        }
+        if (app_state == CommandState::CONFIG && command == "EXIT") {
+            config_data = config_before_config;
+            do_save = false;
+            app_state = state_before_config;
+            if (app_state == CommandState::RUNNING) turn_on();
+            responses.append("CONFIG MODE EXITED, CHANGES DISCARDED\n\r");
+            return;
+        }
+        const bool pending_save = do_save;
+        BaseConfigurator::process_command(command, responses);
+        if (values && app_state == CommandState::CONFIG) do_save |= pending_save;
+    }
+
+    void handle_testing_mode(std::string_view command, UARTResponseAccumulator& responses) {
+        auto motor = get_motor();
+
+        if (command == STOP_COMMAND) {
+            responses.append("Stopping TEST mode\n\r");
+            motor->set_foc_point(FOCTarget{0});
+            app_state = CommandState::RUNNING;
+            _is_logging = false;
+        }
+        else if (command == START_LOGGING_COMMAND) {
+            _is_logging = true;
+        }
+        else if (command == STOP_LOGGING_COMMAND) {
+            _is_logging = false;
+        }
+        else if (command == FREE_COMMAND) {
+            motor->set_foc_point(FOCTarget{0});
+            responses.append("No effort mode\r\n");
+        }
+        else {
+            auto values = split_parameter(command);
+            if (!values) {
+                responses.append("ERROR: Unknown command\n\r");
+                return;
+            }
+            auto [param, value] = *values;
+            float setpoint = 0;
+            bool is_converted = parse_serial_number(value, setpoint);
+            if (!is_converted) {
+                responses.append("ERROR: Unknown command\n\r");
+                return;
+            }
+            if (param == VEL_PARAM) {
+                motor->set_foc_point(FOCTarget{
+                    .torque = 0,
+                    .angle = 0,
+                    .velocity = setpoint,
+                    .angle_kp = 0,
+                    .velocity_kp = 0.5f
+                });
+                responses.append("Set velocity: <%f>\n\r", setpoint);
+            }
+            else if (param == ANGLE_PARAM) {
+                motor->set_foc_point(FOCTarget{
+                    .torque = 0,
+                    .angle = setpoint,
+                    .velocity = 0,
+                    .angle_kp = 7.0f,
+                    .velocity_kp = 0.5
+                });
+                responses.append("Set angle: <%f>\n\r", setpoint);
+            }
+            else {
+                responses.append("ERROR: Unknown command\n\r");
+            }
+        }
+    }
+};

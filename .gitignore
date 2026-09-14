@@ -1,0 +1,5 @@
+build/
+Boards/*/build/
+.vscode/.cmake/
+compile_commands.json
+.DS_Store

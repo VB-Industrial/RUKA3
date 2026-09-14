@@ -1,0 +1,9 @@
+*
+!.gitignore
+!Doxyfile
+!conf.py
+!*.rst
+!Makefile
+!requirements.txt
+!_static/
+!_static/.gitkeep

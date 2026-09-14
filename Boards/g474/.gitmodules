@@ -1,0 +1,6 @@
+[submodule "Drivers/libvoltbro"]
+	path = Drivers/libvoltbro
+	url = https://github.com/VB-Industrial/libvoltbro.git
+[submodule "Drivers/libcxxcanard"]
+	path = Drivers/libcxxcanard
+	url = https://github.com/VB-Industrial/libcxxcanard.git

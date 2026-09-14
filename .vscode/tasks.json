@@ -1,0 +1,65 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {"id": "g474Joint", "type": "pickString", "description": "G474 joint", "options": ["1", "2", "3", "4"], "default": "1"},
+    {"id": "g431Joint", "type": "pickString", "description": "G431 joint", "options": ["5", "6"], "default": "5"},
+    {"id": "canChannel", "type": "promptString", "description": "SocketCAN interface", "default": "can0"},
+    {"id": "bootNode", "type": "promptString", "description": "Bootloader CAN ID (decimal or 0x...)", "default": "0x444"},
+    {"id": "firmwareHex", "type": "promptString", "description": "Application .hex path (not the _full.hex image)"},
+    {"id": "swdHex", "type": "promptString", "description": "Full .hex path for the first SWD flash"}
+  ],
+  "tasks": [
+    {
+      "label": "RUKA3: Build G474 full image",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["-S", "Boards/g474", "-B", "build/g474-joint${input:g474Joint}", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DRUKA3_JOINT_INDEX=${input:g474Joint}"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "RUKA3: Build G474",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "build/g474-joint${input:g474Joint}", "--target", "g474_full_hex", "-j", "8"],
+      "dependsOn": "RUKA3: Build G474 full image",
+      "dependsOrder": "sequence",
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "RUKA3: Build G431 full image",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["-S", "Boards/g431", "-B", "build/g431-joint${input:g431Joint}", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DCMAKE_TOOLCHAIN_FILE=${workspaceFolder}/Boards/g431/cmake/gcc-arm-none-eabi.cmake", "-DRUKA3_JOINT_INDEX=${input:g431Joint}"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "RUKA3: Build G431",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "build/g431-joint${input:g431Joint}", "--target", "VBDrive_full_hex", "-j", "8"],
+      "dependsOn": "RUKA3: Build G431 full image",
+      "dependsOrder": "sequence",
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "RUKA3: Flash full image (SWD)",
+      "type": "shell",
+      "command": "STM32_Programmer_CLI",
+      "args": ["--connect", "port=swd", "--download", "${input:swdHex}", "-hardRst"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    },
+    {
+      "label": "RUKA3: Flash CAN application",
+      "type": "shell",
+      "command": "python3",
+      "args": ["ThirdParty/VBBoot/tests/test_bootloader_fdcan.py", "--hex", "${input:firmwareHex}", "--can-iface", "socketcan", "--can-channel", "${input:canChannel}", "--node-id", "${input:bootNode}"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    }
+  ]
+}

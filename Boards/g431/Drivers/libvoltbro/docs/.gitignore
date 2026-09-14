@@ -1,0 +1,7 @@
+*
+!.gitignore
+!Doxyfile
+!conf.py
+!*.rst
+!Makefile
+!requirements.txt

@@ -1,0 +1,121 @@
+#pragma once
+
+#include <tuple>
+#include <functional>
+#include <utility>
+#include <array>
+#include <string_view>
+#include <type_traits>
+
+#include "cyphal/cyphal.h"
+#include "cyphal/subscriptions/subscription.h"
+
+#include <uavcan/_register/Access_1_0.hpp>
+#include <uavcan/_register/List_1_0.hpp>
+#include <uavcan/_register/Name_1_0.h>
+
+using RegisterAccessRequest = uavcan_register_Access_Request_1_0;
+using RegisterAccessResponse = uavcan_register_Access_Response_1_0;
+using RegisterListRequest = uavcan_register_List_Request_1_0;
+using RegisterListResponse = uavcan_register_List_Response_1_0;
+
+using RegisterCallback = std::function<void(
+    const uavcan_register_Value_1_0&,
+    uavcan_register_Value_1_0&,
+    RegisterAccessResponse&
+)>;
+using RegisterDefinition = std::pair<std::string, RegisterCallback>;
+
+// Non-owning opt-in storage. Names and callback must outlive the handler.
+template<size_t N>
+struct StaticRegisters {
+    const std::array<std::string_view, N>& names;
+    void (*callback)(size_t, const uavcan_register_Value_1_0&,
+                     uavcan_register_Value_1_0&, RegisterAccessResponse&);
+};
+
+template<size_t N, typename Storage = std::array<RegisterDefinition, N>>
+class RegistersHandler:
+        public AbstractSubscription<RegisterListRequest>,
+        public AbstractSubscription<RegisterAccessRequest> {
+private:
+    Storage registers;
+    std::string_view name_at(size_t index) const {
+        if constexpr (std::is_same_v<Storage, StaticRegisters<N>>) return registers.names[index];
+        else return registers[index].first;
+    }
+public:
+    RegistersHandler(Storage&& registers_list, InterfacePtr interface):
+        AbstractSubscription<RegisterListRequest>(
+            interface,
+            uavcan_register_List_1_0_FIXED_PORT_ID_,
+            CanardTransferKindRequest
+        ),
+        AbstractSubscription<RegisterAccessRequest>(
+            interface,
+            uavcan_register_Access_1_0_FIXED_PORT_ID_,
+            CanardTransferKindRequest
+        ),
+        registers(std::move(registers_list))
+    {}
+
+    virtual CanardFilter make_filter(CanardNodeID node_id) override {
+        CanardFilter access_filter = AbstractSubscription<RegisterAccessRequest>::make_filter(node_id);
+        CanardFilter list_filter = AbstractSubscription<RegisterListRequest>::make_filter(node_id);
+        return canardConsolidateFilters(&access_filter, &list_filter);
+    }
+
+    void handler(const RegisterListRequest& register_list_request, CanardRxTransfer* transfer) override {
+        RegisterListResponse register_list_response = {};
+
+        uavcan_register_Name_1_0 name = {};
+
+        if (register_list_request.index < N) {
+            const auto register_name = name_at(register_list_request.index);
+            memcpy(name.name.elements, register_name.data(), register_name.size());
+            name.name.count = register_name.size();
+        }
+        register_list_response.name = name;
+
+        AbstractSubscription<RegisterListRequest>::interface->send_response(
+            &register_list_response, transfer
+        );
+    };
+
+    void handler(const RegisterAccessRequest& register_access_request, CanardRxTransfer* transfer) override {
+        RegisterAccessResponse register_access_response = {};
+
+        InterfacePtr interface = AbstractSubscription<RegisterAccessRequest>::interface;
+
+        register_access_response.timestamp.microsecond = interface->get_utilities().micros_64();
+        uavcan_register_Value_1_0 value = {};
+
+        bool is_found = false;
+        for (size_t index = 0; index < N; ++index) {
+            const auto register_name = name_at(index);
+            if (register_name.size() != register_access_request.name.name.count) continue;
+            if(memcmp(
+                register_name.data(),
+                register_access_request.name.name.elements,
+                register_access_request.name.name.count
+            ) != 0) {
+                continue;
+            }
+            is_found = true;
+            if constexpr (std::is_same_v<Storage, StaticRegisters<N>>)
+                registers.callback(index, register_access_request.value, value, register_access_response);
+            else
+                registers[index].second(register_access_request.value, value, register_access_response);
+            break;
+        }
+        if (!is_found) {
+            value._tag_ = 0;
+            value.empty = {};
+        }
+
+        register_access_response.value = value;
+        AbstractSubscription<RegisterAccessRequest>::interface->send_response(
+            &register_access_response, transfer
+        );
+    };
+};
