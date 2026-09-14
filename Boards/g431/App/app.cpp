@@ -34,6 +34,8 @@
 #include <voltbro/motors/bldc/vbdrive/vbdrive.hpp>
 #include <voltbro/utils.hpp>
 #include "robot_config.h"
+#include "joint_controller.hpp"
+#include "protocol.h"
 //#pragma endregion
 
 static constexpr uint32_t SETUP_NODE_ID_MAX = CANARD_NODE_ID_MAX - 1U;
@@ -139,8 +141,13 @@ alignas(4) static CalibrationData calibration_data;  // avoid stack overflow and
 static std::aligned_storage_t<sizeof(VBDrive), alignof(VBDrive)> motor_storage;
 static VBDrive* motor = nullptr;
 static bool motor_calibration_valid = false;
+static ruka3::JointController joint_controller;
+static ruka3::CanFaultMonitor can_fault_monitor{hfdcan1};
 VBDrive* get_motor() {
     return motor;
+}
+const ruka3::CanFaultSnapshot& get_can_fault_snapshot() {
+    return can_fault_monitor.snapshot();
 }
 
 bool is_motor_calibrated() { return motor_calibration_valid; }
@@ -241,6 +248,7 @@ bool do_calibrate() {
     auto& app_manager = get_app_manager();
     app_manager.set_state(CommandState::NOT_CALIBRATED);
 
+    joint_controller.calibration_started();
     calibration_data.reset();
     // NOTE: see app.h lines 20-21 for details on cyphal_queue_buffer_shared
     motor->calibrate(calibration_data, cyphal_queue_buffer_shared, SHARED_BUFFER_SIZE);
@@ -248,6 +256,7 @@ bool do_calibrate() {
     HAL_IMPORTANT(eeprom.write<CalibrationData>(&calibration_data, CALIBRATION_PLACEMENT))
     motor->apply_calibration(calibration_data);
     motor_calibration_valid = true;
+    joint_controller.calibration_finished(true);
 
     app_manager.set_state(CommandState::RUNNING);
     return true;
@@ -263,10 +272,12 @@ void apply_calibration() {
         char warning_message[] = "Motor is not calibrated! Movement forbidden\n\r\0";
         app_manager.send_message_blocking(warning_message);
         app_manager.set_state(CommandState::NOT_CALIBRATED);
+        joint_controller.configuration_loaded(false);
         return;
     }
     motor->apply_calibration(calibration_data);
     motor_calibration_valid = true;
+    joint_controller.configuration_loaded(true);
 }
 
 static void persist_pending_config_if_needed();
@@ -281,7 +292,6 @@ void app() {
     eeprom.wait_until_available();
     auto& app_manager = get_app_manager();
     app_manager.init();
-    start_uart_recv_it();
     auto& config_data = app_manager.get_config();
     constexpr auto& joint_profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
     if (config_data.node_id != joint_profile.node_id) {
@@ -293,14 +303,19 @@ void app() {
         app_manager.set_state(CommandState::RUNNING);
     }
 
+    // Bring up the fixed FDCAN transport before the motor stack. This is the
+    // same ordering as the communication bootstrap, so motor initialization
+    // cannot alter or delay CAN startup.
+    start_cyphal();
+
     if (!app_manager.is_app_running()) {
         // Bring up Cyphal even with blank EEPROM so config can be restored over CAN.
         if (config_data.node_id == 0) {
             config_data.node_id = joint_profile.node_id;
         }
-        start_cyphal();
         set_cyphal_mode(uavcan_node_Mode_1_0_MAINTENANCE);
         while (true) {
+            can_fault_monitor.poll();
             cyphal_loop();
             persist_pending_config_if_needed();
             reboot_to_bootloader_if_requested();
@@ -321,7 +336,6 @@ void app() {
         motor->update();
     }
 
-    start_cyphal();
     set_cyphal_mode(uavcan_node_Mode_1_0_OPERATIONAL);
 
     // Lock heap, no dynamic memory is used at runtime
@@ -336,6 +350,7 @@ void app() {
     static millis logging_time = 0;
 
     while(true) {
+        can_fault_monitor.poll();
         if (app_manager.is_app_running()) {
             cyphal_loop();
             persist_pending_config_if_needed();
@@ -369,10 +384,10 @@ void app() {
 using FOCState = voltbro_foc_state_simple_1_0;
 using SpecificControl = voltbro_foc_specific_control_1_0;
 
-static constexpr CanardPortID FOC_COMMAND_PORT = 2107;
+static constexpr CanardPortID FOC_COMMAND_PORT = ruka3::protocol::kMitCommandBase;
 static constexpr CanardPortID FOC_STATE_PORT =
     ruka3::joint_profile(RUKA3_JOINT_INDEX).feedback_subject_id;
-static constexpr CanardPortID SPECIFIC_CONTROL_PORT = 3407;
+static constexpr CanardPortID SPECIFIC_CONTROL_PORT = ruka3::protocol::kSpecificControlBase;
 
 static bool config_save_pending = false;
 
@@ -428,7 +443,7 @@ class FOCCommandSub: public AbstractSubscription<voltbro_foc_MIT_1_0> {
 public:
     FOCCommandSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<voltbro_foc_MIT_1_0>(interface, port_id) {};
     void handler(const voltbro_foc_MIT_1_0& msg, CanardRxTransfer*) override {
-        if (!motor_calibration_valid) {
+        if (!joint_controller.accepts_motor_commands()) {
             record_invalid_command();
             return;
         }
@@ -452,7 +467,7 @@ public:
     #pragma GCC diagnostic ignored "-Wunused-parameter"
     // NOTE: transfer parameter required by the interface, but not used in this implementation
     void handler(const SpecificControl& msg, CanardRxTransfer* _) override {
-        if (!motor_calibration_valid) {
+        if (!joint_controller.accepts_motor_commands()) {
             record_invalid_command();
             return;
         }

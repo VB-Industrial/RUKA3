@@ -18,12 +18,13 @@
 #include <voltbro/foc/state_simple_1_0.h>
 
 #include "robot_config.h"
+#include "protocol.h"
 #include <voltbro/utils.hpp>
 
 namespace {
 
-constexpr std::uint32_t kBootRequestMagic = 0xB00710ADUL;
-constexpr std::uint32_t kNetworkTimeoutMs = 3000U;
+constexpr std::uint32_t kBootRequestMagic = ruka3::protocol::kBootRequestMagic;
+constexpr std::uint32_t kNetworkTimeoutMs = ruka3::protocol::kNetworkTimeoutMs;
 constexpr auto& kProfile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
 
 TYPE_ALIAS(Heartbeat, uavcan_node_Heartbeat_1_0)

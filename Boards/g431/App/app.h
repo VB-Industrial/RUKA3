@@ -8,6 +8,7 @@
 #include <voltbro/motors/bldc/vbdrive/vbdrive.hpp>
 
 #include "state_manager.hpp"
+#include "can_fault_monitor.hpp"
 
 // state_manager.hpp
 // CALIBRATION_PLACEMENT
@@ -42,6 +43,7 @@ void start_timers();
 
 // app.cpp
 VBDrive* get_motor();
+const ruka3::CanFaultSnapshot& get_can_fault_snapshot();
 EEPROM& get_eeprom();
 bool is_motor_calibrated();
 int32_t get_motor_calibration_offset();
@@ -56,7 +58,6 @@ extern FDCAN_HandleTypeDef hfdcan1;
 
 // state_manager.cpp
 DriveStateController& get_app_manager();
-void configure_fdcan(FDCAN_HandleTypeDef*);
 void reboot_to_bootloader();
 
 template <typename T>
@@ -70,4 +71,3 @@ inline T value_or_default(T value, T default_value, T not_set_value) {
 }
 
 //command_mode.cpp
-void start_uart_recv_it();

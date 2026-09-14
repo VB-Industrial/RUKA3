@@ -102,8 +102,6 @@ static std::byte cyphal_bss_buffer[
 std::byte cyphal_queue_buffer_shared[SHARED_BUFFER_SIZE] __attribute__((aligned(O1HEAP_ALIGNMENT)));
 
 void start_cyphal() {
-    configure_fdcan(&hfdcan1);
-
     cyphal_interface = std::shared_ptr<CyphalInterface>(CyphalInterface::create_bss<G4CAN, O1Allocator>(
         cyphal_bss_buffer,
         get_app_manager().get_node_id(),

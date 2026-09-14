@@ -199,6 +199,20 @@ The remaining parameters are non-persistent:
 | `is_fault` | bit | read-only | Currently false; DRV_FAULT integration is deferred |
 | `encoder_shaft` | natural32 | read-only | Raw external encoder counts |
 | `encoder_rotor` | natural32 | read-only | Raw internal encoder counts |
+| `can_err_total` | natural32 | read-only | Errors accumulated by the FDCAN error-logging counter since MCU startup |
+| `can_rx_err` | natural32 | read-only | Current hardware receive error counter (REC) |
+| `can_tx_err` | natural32 | read-only | Current hardware transmit error counter (TEC) |
+| `can_err_log` | natural32 | read-only | Current hardware CAN error-logging counter (CEL, saturates at 255) |
+| `can_arb_lec` | natural32 | read-only | Last arbitration-phase protocol error code from FDCAN PSR |
+| `can_data_lec` | natural32 | read-only | Last CAN-FD data-phase protocol error code from FDCAN PSR |
+| `can_warning` | bit | read-only | FDCAN error-warning state |
+| `can_passive` | bit | read-only | FDCAN error-passive state |
+| `can_bus_off` | bit | read-only | FDCAN bus-off state |
+
+FDCAN last-error codes are: 0 no error, 1 stuffing, 2 form, 3 acknowledgement,
+4 bit recessive, 5 bit dominant, 6 CRC, and 7 no change. The session total is
+monotonic across an FDCAN peripheral reinitialization, but cannot grow while
+the hardware CEL counter is saturated.
 
 Readonly writes do not change values. Unavailable motor measurements return an empty Cyphal value / a Serial error before motor initialization. `firmware_rev` also supplies GetInfo's numeric `software_vcs_revision_id`; it identifies the commit, not uncommitted changes.
 

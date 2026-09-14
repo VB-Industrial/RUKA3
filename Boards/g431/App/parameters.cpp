@@ -26,7 +26,35 @@ void record_invalid_command() {
 
 bool read_parameter(const VBDriveConfig& config, ParameterId id, ParameterValue& value) {
     value = {};
+    const auto& can_faults = get_can_fault_snapshot();
     switch (id) {
+        case ParameterId::CAN_ERR_TOTAL:
+            value.emplace<uint32_t>(can_faults.session_error_count);
+            return true;
+        case ParameterId::CAN_RX_ERR:
+            value.emplace<uint32_t>(can_faults.rx_error_count);
+            return true;
+        case ParameterId::CAN_TX_ERR:
+            value.emplace<uint32_t>(can_faults.tx_error_count);
+            return true;
+        case ParameterId::CAN_ERR_LOG:
+            value.emplace<uint32_t>(can_faults.error_logging_count);
+            return true;
+        case ParameterId::CAN_ARB_LEC:
+            value.emplace<uint32_t>(can_faults.arbitration_last_error);
+            return true;
+        case ParameterId::CAN_DATA_LEC:
+            value.emplace<uint32_t>(can_faults.data_last_error);
+            return true;
+        case ParameterId::CAN_WARNING:
+            value.emplace<bool>(can_faults.warning);
+            return true;
+        case ParameterId::CAN_PASSIVE:
+            value.emplace<bool>(can_faults.error_passive);
+            return true;
+        case ParameterId::CAN_BUS_OFF:
+            value.emplace<bool>(can_faults.bus_off);
+            return true;
         case ParameterId::ANG_DIR:
             value.emplace<int32_t>(config.angle_direction == -1 ? -1 : 1);
             return true;
@@ -88,10 +116,10 @@ bool read_parameter(const VBDriveConfig& config, ParameterId id, ParameterValue&
             value.emplace<uint32_t>(config.node_id);
             return true;
         case ParameterId::DATA_BAUD:
-            value.emplace<uint32_t>(to_underlying(config.fdcan_data_baud));
+            value.emplace<uint32_t>(to_underlying(FDCANDataBaud::KHz8000));
             return true;
         case ParameterId::NOMINAL_BAUD:
-            value.emplace<uint32_t>(to_underlying(config.fdcan_nominal_baud));
+            value.emplace<uint32_t>(to_underlying(FDCANNominalBaud::KHz1000));
             return true;
         case ParameterId::CMD_ERRORS:
             value.emplace<uint32_t>(invalid_commands_counter);
@@ -216,14 +244,6 @@ ParameterWriteResult write_persistent_parameter(
         case ParameterId::NODE_ID:
             if (std::get<uint32_t>(value) == 0 || std::get<uint32_t>(value) > CANARD_NODE_ID_MAX) return ParameterWriteResult::INVALID;
             config.node_id = static_cast<CanardNodeID>(std::get<uint32_t>(value));
-            break;
-        case ParameterId::DATA_BAUD:
-            if (std::get<uint32_t>(value) > to_underlying(FDCANDataBaud::KHz8000)) return ParameterWriteResult::INVALID;
-            config.fdcan_data_baud = static_cast<FDCANDataBaud>(std::get<uint32_t>(value));
-            break;
-        case ParameterId::NOMINAL_BAUD:
-            if (std::get<uint32_t>(value) > to_underlying(FDCANNominalBaud::KHz1000)) return ParameterWriteResult::INVALID;
-            config.fdcan_nominal_baud = static_cast<FDCANNominalBaud>(std::get<uint32_t>(value));
             break;
         default:
             return ParameterWriteResult::READ_ONLY;

@@ -18,6 +18,7 @@
 #include <voltbro/foc/state_simple_1_0.hpp>
 
 #include "robot_config.h"
+#include "protocol.h"
 #include <voltbro/utils.hpp>
 
 extern FDCAN_HandleTypeDef hfdcan1;
@@ -28,8 +29,8 @@ bool global_allocation_lock = false;
 
 namespace {
 
-constexpr std::uint32_t kBootRequestMagic = 0xB00710ADUL;
-constexpr std::uint32_t kNetworkTimeoutMs = 3000U;
+constexpr std::uint32_t kBootRequestMagic = ruka3::protocol::kBootRequestMagic;
+constexpr std::uint32_t kNetworkTimeoutMs = ruka3::protocol::kNetworkTimeoutMs;
 constexpr auto& kProfile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
 
 using Heartbeat = uavcan_node_Heartbeat_1_0;
@@ -154,28 +155,6 @@ void read_network_timeout_ms(const uavcan_register_Value_1_0& input,
     while (true) {}
 }
 
-void configure_can() {
-    hfdcan1.Instance = FDCAN1;
-    hfdcan1.Init.ClockDivider = FDCAN_CLOCK_DIV2;
-    hfdcan1.Init.FrameFormat = FDCAN_FRAME_FD_BRS;
-    hfdcan1.Init.Mode = FDCAN_MODE_NORMAL;
-    hfdcan1.Init.AutoRetransmission = ENABLE;
-    hfdcan1.Init.TransmitPause = DISABLE;
-    hfdcan1.Init.ProtocolException = DISABLE;
-    hfdcan1.Init.NominalPrescaler = 1U;
-    hfdcan1.Init.NominalSyncJumpWidth = 24U;
-    hfdcan1.Init.NominalTimeSeg1 = 55U;
-    hfdcan1.Init.NominalTimeSeg2 = 24U;
-    hfdcan1.Init.DataPrescaler = 1U;
-    hfdcan1.Init.DataSyncJumpWidth = 4U;
-    hfdcan1.Init.DataTimeSeg1 = 5U;
-    hfdcan1.Init.DataTimeSeg2 = 4U;
-    hfdcan1.Init.StdFiltersNbr = 0U;
-    hfdcan1.Init.ExtFiltersNbr = 4U;
-    hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
-    HAL_IMPORTANT(HAL_FDCAN_Init(&hfdcan1))
-}
-
 void publish_heartbeat() {
     static CanardTransferID transfer_id = 0;
     static std::uint32_t uptime = 0;
@@ -210,7 +189,6 @@ void publish_safe_state() {
 
 extern "C" void app() {
     force_power_stage_safe();
-    configure_can();
 
     interface = std::shared_ptr<CyphalInterface>(CyphalInterface::create_heap<G4CAN, O1Allocator>(
         kProfile.node_id,

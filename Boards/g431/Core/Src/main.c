@@ -21,6 +21,7 @@
 #include "adc.h"
 #include "cordic.h"
 #include "dma.h"
+#include "fdcan.h"
 #include "i2c.h"
 #include "spi.h"
 #include "tim.h"
@@ -99,10 +100,10 @@ int main(void)
   MX_CORDIC_Init();
   MX_TIM1_Init();
   MX_I2C3_Init();
+  MX_FDCAN1_Init();
   MX_ADC2_Init();
   MX_I2C2_Init();
   MX_SPI1_Init();
-  MX_USART2_UART_Init();
   MX_TIM2_Init();
   MX_TIM4_Init();
   MX_TIM7_Init();

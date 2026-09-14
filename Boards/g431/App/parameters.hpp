@@ -52,7 +52,16 @@ enum class ParameterId : uint8_t {
     CALIB_VALID,
     CALIB_OFFSET,
     CALIB_INVERTED,
-    ELECTRIC_ANGLE
+    ELECTRIC_ANGLE,
+    CAN_ERR_TOTAL,
+    CAN_RX_ERR,
+    CAN_TX_ERR,
+    CAN_ERR_LOG,
+    CAN_ARB_LEC,
+    CAN_DATA_LEC,
+    CAN_WARNING,
+    CAN_PASSIVE,
+    CAN_BUS_OFF
 };
 
 struct ParameterDefinition {
@@ -76,7 +85,7 @@ enum class ParameterWriteResult : uint8_t {
     UNAVAILABLE
 };
 
-inline constexpr std::array<ParameterDefinition, 37> PARAMETER_CATALOG{{
+inline constexpr std::array<ParameterDefinition, 46> PARAMETER_CATALOG{{
     {ParameterId::GEAR,          "gear",          ParameterType::NATURAL32, true,  true},
     {ParameterId::MAX_I,         "max_i",         ParameterType::REAL32,    true,  true},
     {ParameterId::MAX_SPD,       "max_spd",       ParameterType::REAL32,    true,  true},
@@ -96,8 +105,8 @@ inline constexpr std::array<ParameterDefinition, 37> PARAMETER_CATALOG{{
     {ParameterId::I_LPF,         "i_lpf",         ParameterType::REAL32,    true,  true},
     {ParameterId::ANG_ENC,       "ang_enc",       ParameterType::NATURAL32, true,  true},
     {ParameterId::NODE_ID,       "node_id",       ParameterType::NATURAL32, true,  true},
-    {ParameterId::DATA_BAUD,     "data_baud",     ParameterType::NATURAL32, true,  true},
-    {ParameterId::NOMINAL_BAUD,  "nominal_baud",  ParameterType::NATURAL32, true,  true},
+    {ParameterId::DATA_BAUD,     "data_baud",     ParameterType::NATURAL32, false, false},
+    {ParameterId::NOMINAL_BAUD,  "nominal_baud",  ParameterType::NATURAL32, false, false},
     {ParameterId::IS_ON,         "is_on",         ParameterType::BIT,       true,  false},
     {ParameterId::BOOTLOADER,    "bootloader",    ParameterType::BIT,       true,  false},
     {ParameterId::CMD_ERRORS,    "cmd_errors",    ParameterType::NATURAL32, false, false},
@@ -114,6 +123,15 @@ inline constexpr std::array<ParameterDefinition, 37> PARAMETER_CATALOG{{
     {ParameterId::CALIB_OFFSET,   "calib_offset",  ParameterType::INTEGER32, false, false},
     {ParameterId::CALIB_INVERTED, "calib_inverted",ParameterType::BIT,       false, false},
     {ParameterId::ELECTRIC_ANGLE, "electric_angle",ParameterType::REAL32,    false, false},
+    {ParameterId::CAN_ERR_TOTAL,  "can_err_total", ParameterType::NATURAL32, false, false},
+    {ParameterId::CAN_RX_ERR,     "can_rx_err",    ParameterType::NATURAL32, false, false},
+    {ParameterId::CAN_TX_ERR,     "can_tx_err",    ParameterType::NATURAL32, false, false},
+    {ParameterId::CAN_ERR_LOG,    "can_err_log",   ParameterType::NATURAL32, false, false},
+    {ParameterId::CAN_ARB_LEC,    "can_arb_lec",   ParameterType::NATURAL32, false, false},
+    {ParameterId::CAN_DATA_LEC,   "can_data_lec",  ParameterType::NATURAL32, false, false},
+    {ParameterId::CAN_WARNING,    "can_warning",   ParameterType::BIT,       false, false},
+    {ParameterId::CAN_PASSIVE,    "can_passive",   ParameterType::BIT,       false, false},
+    {ParameterId::CAN_BUS_OFF,    "can_bus_off",   ParameterType::BIT,       false, false},
 }};
 
 consteval bool parameter_catalog_is_valid() {

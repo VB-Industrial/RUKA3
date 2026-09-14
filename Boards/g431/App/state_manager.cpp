@@ -105,63 +105,6 @@ void reboot_to_bootloader() {
     NVIC_SystemReset();
 }
 
-static constexpr uint16_t UART_RX_BUFFER_SIZE = 32;
-static char uart_rx_buffer[UART_RX_BUFFER_SIZE];
-
-void start_uart_recv_it() {
-    /*
-    / If TX uses DMA, next line is not needed,
-    / if TX is IT or direct, next line is required due to bug in HAL.
-    / Kept here so I don't forget
-    HAL_UART_Abort_IT(&huart2);
-    */
-    auto status = HAL_UARTEx_ReceiveToIdle_DMA(
-        &huart2,
-        reinterpret_cast<uint8_t*>(uart_rx_buffer),
-        UART_RX_BUFFER_SIZE
-    );
-    if (status != HAL_OK) {
-        Error_Handler();
-    }
-    __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_HT);
-}
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-// NOTE: huart parameter required by the interface, but not used in this implementation
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t size) {
-#pragma GCC diagnostic pop
-    drive_state_controller.process_command(std::string_view(uart_rx_buffer, size));
-    drive_state_controller.wait_for_uart();
-    start_uart_recv_it();
-}
-
-void configure_fdcan(FDCAN_HandleTypeDef* hfdcan) {
-    hfdcan->Instance = FDCAN1;
-    hfdcan->Init.ClockDivider = FDCAN_CLOCK_DIV2;
-    hfdcan->Init.FrameFormat = FDCAN_FRAME_FD_BRS;
-    hfdcan->Init.Mode = FDCAN_MODE_NORMAL;
-    hfdcan->Init.AutoRetransmission = ENABLE;
-    hfdcan->Init.TransmitPause = DISABLE;
-    hfdcan->Init.ProtocolException = DISABLE;
-    hfdcan->Init.NominalSyncJumpWidth = 24;
-    hfdcan->Init.NominalTimeSeg1 = 55;
-    hfdcan->Init.NominalTimeSeg2 = 24;
-    hfdcan->Init.DataSyncJumpWidth = 4;
-    hfdcan->Init.DataTimeSeg1 = 5;
-    hfdcan->Init.DataTimeSeg2 = 4;
-    hfdcan->Init.StdFiltersNbr = 0;
-    hfdcan->Init.ExtFiltersNbr = 4;
-    hfdcan->Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
-
-    hfdcan->Init.NominalPrescaler = drive_state_controller.get_nom_prescaler();
-    hfdcan->Init.DataPrescaler = drive_state_controller.get_data_prescaler();
-
-    if (HAL_FDCAN_Init(hfdcan) != HAL_OK) {
-        Error_Handler();
-    }
-}
-
 bool VBDriveConfig::are_required_params_set() {
     return BaseConfigData::are_required_params_set() && gear_ratio != 0;
 }

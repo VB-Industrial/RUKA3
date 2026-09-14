@@ -1,6 +1,4 @@
-#include "app.h"
-
-FDCAN_HandleTypeDef hfdcan1;
+#include "fdcan.h"
 
 extern "C" {
 
@@ -10,7 +8,7 @@ void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef* fdcanHandle) {
 
     if(fdcanHandle->Instance==FDCAN1) {
         PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_FDCAN;
-        PeriphClkInit.FdcanClockSelection = RCC_FDCANCLKSOURCE_PCLK1;
+        PeriphClkInit.FdcanClockSelection = RCC_FDCANCLKSOURCE_PLL;
         if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
             Error_Handler();
         }
