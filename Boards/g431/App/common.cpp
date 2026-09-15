@@ -52,8 +52,6 @@ static uint16_t profile_sample_counter = 0;
 #endif
 
 __attribute__((hot)) void main_callback() {
-    auto& app_manager = get_app_manager();
-
     #ifdef ENABLE_DT
     // it can never start at 0t, so 0 is "not set" value
     static micros last_call = 0;
@@ -84,10 +82,8 @@ __attribute__((hot)) void main_callback() {
     last_call = now;
     #endif
 
-    if (app_manager.is_app_running()) {
-        if (auto motor = get_motor()) {
-            motor->update();
-        }
+    if (auto motor = get_motor()) {
+        motor->update();
     }
     #ifdef FOC_PROFILE
     if (profile_this_call) {

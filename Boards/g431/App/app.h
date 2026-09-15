@@ -9,10 +9,10 @@
 
 #include "state_manager.hpp"
 #include "can_fault_monitor.hpp"
+#include "fault_manager.hpp"
 
 // state_manager.hpp
 // CALIBRATION_PLACEMENT
-// CONFIG_PLACEMENT
 // IND_SENSOR_STATE_PLACEMENT
 
 // communications.cpp
@@ -34,6 +34,7 @@ void cyphal_loop();
 void start_cyphal();
 void monitor_loop(millis);
 void set_cyphal_mode(uint8_t mode);
+void set_cyphal_health(uint8_t health);
 
 // common.cpp
 micros system_time();
@@ -44,6 +45,8 @@ void start_timers();
 // app.cpp
 VBDrive* get_motor();
 const ruka3::CanFaultSnapshot& get_can_fault_snapshot();
+const ruka3::FaultSnapshot& get_fault_snapshot();
+bool acknowledge_faults();
 EEPROM& get_eeprom();
 bool is_motor_calibrated();
 int32_t get_motor_calibration_offset();
@@ -57,17 +60,6 @@ bool do_calibrate();
 extern FDCAN_HandleTypeDef hfdcan1;
 
 // state_manager.cpp
-DriveStateController& get_app_manager();
 void reboot_to_bootloader();
-
-template <typename T>
-inline T value_or_default(T value, T default_value) {
-    return std::isnan(value) ? default_value : value;
-}
-
-template <typename T>
-inline T value_or_default(T value, T default_value, T not_set_value) {
-    return (value == not_set_value) ? default_value : value;
-}
 
 //command_mode.cpp

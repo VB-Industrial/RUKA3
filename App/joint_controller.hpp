@@ -22,6 +22,11 @@ public:
     void calibration_started() { state_ = JointState::calibrating; }
     void calibration_finished(bool valid) { state_ = valid ? JointState::ready : JointState::fault; }
     void fault() { state_ = JointState::fault; }
+    bool acknowledge_fault(bool configuration_valid) {
+        if (state_ != JointState::fault || !configuration_valid) return false;
+        state_ = JointState::ready;
+        return true;
+    }
 
     bool arm() {
         if (state_ != JointState::ready) return false;

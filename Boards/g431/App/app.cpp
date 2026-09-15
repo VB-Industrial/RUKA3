@@ -18,6 +18,7 @@
 #include <cyphal/providers/G4CAN.h>
 
 #include <uavcan/node/Mode_1_0.hpp>
+#include <uavcan/node/Health_1_0.hpp>
 #include <uavcan/primitive/Empty_1_0.hpp>
 #include <uavcan/primitive/array/Real32_1_0.hpp>
 #include <uavcan/primitive/scalar/Real32_1_0.hpp>
@@ -35,26 +36,9 @@
 #include <voltbro/utils.hpp>
 #include "robot_config.h"
 #include "joint_controller.hpp"
+#include "parameters.hpp"
 #include "protocol.h"
 //#pragma endregion
-
-static constexpr uint32_t SETUP_NODE_ID_MAX = CANARD_NODE_ID_MAX - 1U;
-
-static CanardNodeID make_unconfigured_setup_node_id() {
-    uint32_t hash = 2166136261UL;
-    const uint32_t uid_words[3] = {
-        HAL_GetUIDw0(),
-        HAL_GetUIDw1(),
-        HAL_GetUIDw2()
-    };
-    for (uint32_t word : uid_words) {
-        for (uint8_t byte_index = 0; byte_index < 4; byte_index++) {
-            hash ^= (word >> (byte_index * 8U)) & 0xFFU;
-            hash *= 16777619UL;
-        }
-    }
-    return static_cast<CanardNodeID>(1U + (hash % SETUP_NODE_ID_MAX));
-}
 
 //#pragma region ExternConfiguration
 #define NANOPRINTF_IMPLEMENTATION
@@ -143,11 +127,38 @@ static VBDrive* motor = nullptr;
 static bool motor_calibration_valid = false;
 static ruka3::JointController joint_controller;
 static ruka3::CanFaultMonitor can_fault_monitor{hfdcan1};
+static ruka3::FaultManager fault_manager;
 VBDrive* get_motor() {
     return motor;
 }
 const ruka3::CanFaultSnapshot& get_can_fault_snapshot() {
     return can_fault_monitor.snapshot();
+}
+const ruka3::FaultSnapshot& get_fault_snapshot() {
+    return fault_manager.snapshot();
+}
+
+bool acknowledge_faults() {
+    if (!fault_manager.acknowledge()) {
+        return false;
+    }
+    return joint_controller.acknowledge_fault(motor_calibration_valid);
+}
+
+static void update_fault_manager() {
+    const bool driver_fault = HAL_GPIO_ReadPin(DRV_FAULT_GPIO_Port, DRV_FAULT_Pin) == GPIO_PIN_RESET;
+    if (fault_manager.update(can_fault_monitor.snapshot(), motor_calibration_valid, driver_fault)) {
+        motor->set_foc_point(FOCTarget{0});
+        motor->set_state(false);
+        joint_controller.fault();
+    }
+
+    const auto level = fault_manager.snapshot().level;
+    set_cyphal_health(level == ruka3::FaultLevel::fault || level == ruka3::FaultLevel::degraded
+            ? uavcan_node_Health_1_0_CAUTION
+            : level == ruka3::FaultLevel::warning
+                ? uavcan_node_Health_1_0_ADVISORY
+                : uavcan_node_Health_1_0_NOMINAL);
 }
 
 bool is_motor_calibrated() { return motor_calibration_valid; }
@@ -155,71 +166,66 @@ int32_t get_motor_calibration_offset() { return calibration_data.meas_elec_offse
 bool is_motor_encoder_inverted() { return calibration_data.is_encoder_inverted; }
 float get_motor_electric_angle() { return motor ? motor->get_electric_angle() : 0.0F; }
 
-static int8_t config_angle_direction(const VBDriveConfig& config_data) {
-    if (config_data.angle_direction == -1) {
-        return -1;
-    }
-    return 1;
-}
-
-void create_motor(VBDriveConfig& config_data) {
+void create_motor() {
+    constexpr auto& profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
+    constexpr auto& motor_profile = profile.motor;
+    constexpr auto angle_encoder = motor_profile.position_source == ruka3::PositionSource::shaft
+        ? AngleEncoderType::SHAFT : AngleEncoderType::ROTOR;
     motor = new (&motor_storage) VBDrive(
-        0.000025f,
+        motor_profile.control_period_s,
         // Kalman filter for determining electric angle
         FiltersConfig {
-            .expected_a = value_or_default(config_data.filter_a, VBDriveDefaults::FILTER_A),
-            .g1 = value_or_default(config_data.filter_g1, VBDriveDefaults::FILTER_G1),
-            .g2 = value_or_default(config_data.filter_g2, VBDriveDefaults::FILTER_G2),
-            .g3 = value_or_default(config_data.filter_g3, VBDriveDefaults::FILTER_G3),
-            .I_lpf_coefficient = value_or_default(config_data.I_lpf_coefficient, VBDriveDefaults::I_LPF)
+            .expected_a = motor_profile.filter_expected_a,
+            .g1 = motor_profile.filter_g1,
+            .g2 = motor_profile.filter_g2,
+            .g3 = motor_profile.filter_g3,
+            .I_lpf_coefficient = motor_profile.current_lpf
         },
         // Q Regulator
         PIDConfig {
             .multiplier = 1.0f,
-            .kp = value_or_default(config_data.kp, VBDriveDefaults::PID_KP),
-            .ki = value_or_default(config_data.ki, VBDriveDefaults::PID_KI),
-            .kd = value_or_default(config_data.kd, VBDriveDefaults::PID_KD),
-            .integral_error_lim = VBDriveDefaults::MAX_VOLTAGE,
-            .max_output = VBDriveDefaults::MAX_VOLTAGE,
-            .min_output = -VBDriveDefaults::MAX_VOLTAGE,
+            .kp = motor_profile.current_pid_kp,
+            .ki = motor_profile.current_pid_ki,
+            .kd = motor_profile.current_pid_kd,
+            .integral_error_lim = motor_profile.max_voltage,
+            .max_output = motor_profile.max_voltage,
+            .min_output = -motor_profile.max_voltage,
         },
         // D Regulator
         PIDConfig {
             .multiplier = 1.0f,
-            .kp = value_or_default(config_data.kp, VBDriveDefaults::PID_KP),
-            .ki = value_or_default(config_data.ki, VBDriveDefaults::PID_KI),
-            .kd = value_or_default(config_data.kd, VBDriveDefaults::PID_KD),
-            .integral_error_lim = VBDriveDefaults::MAX_VOLTAGE,
-            .max_output = VBDriveDefaults::MAX_VOLTAGE,
-            .min_output = -VBDriveDefaults::MAX_VOLTAGE,
+            .kp = motor_profile.current_pid_kp,
+            .ki = motor_profile.current_pid_ki,
+            .kd = motor_profile.current_pid_kd,
+            .integral_error_lim = motor_profile.max_voltage,
+            .max_output = motor_profile.max_voltage,
+            .min_output = -motor_profile.max_voltage,
         },
         // User-defined runtime config
         DriveRuntimeConfig {
-            .user_current_limit = value_or_default(config_data.max_current, NAN),
-            .user_torque_limit = value_or_default(config_data.max_torque, NAN),
-            .user_speed_limit = value_or_default(config_data.max_speed, NAN),
-            .user_position_lower_limit = value_or_default(config_data.min_angle, NAN),
-            .user_position_upper_limit = value_or_default(config_data.max_angle, NAN),
-            .user_angle_offset = value_or_default(config_data.angle_offset, VBDriveDefaults::ANGLE_OFFSET),
-            .user_angle_direction = config_angle_direction(config_data)
+            .user_current_limit = motor_profile.current_limit,
+            .user_torque_limit = motor_profile.torque_limit,
+            .user_speed_limit = motor_profile.speed_limit > 0.0F ? motor_profile.speed_limit : NAN,
+            .user_position_lower_limit = (motor_profile.position_lower_limit == 0.0F && motor_profile.position_upper_limit == 0.0F)
+                ? NAN : motor_profile.position_lower_limit,
+            .user_position_upper_limit = (motor_profile.position_lower_limit == 0.0F && motor_profile.position_upper_limit == 0.0F)
+                ? NAN : motor_profile.position_upper_limit,
+            .user_angle_offset = motor_profile.position_offset,
+            .user_angle_direction = motor_profile.position_direction
         },
         // Built-in constant parameters
         DriveInfo {
-            .torque_const = value_or_default(config_data.torque_const, VBDriveDefaults::TORQUE_CONST),
-            .max_current = 30.0,
-            .max_torque = 30.0f,
-            .stall_current = 6.0f,
-            .stall_timeout = 3.0f,
-            .stall_tolerance = 0.2f,
-            .calibration_voltage = 0.2f,
+            .torque_const = motor_profile.torque_const,
+            .max_current = motor_profile.current_limit,
+            .max_torque = motor_profile.torque_limit,
+            .stall_current = motor_profile.stall_current,
+            .stall_timeout = motor_profile.stall_timeout_s,
+            .stall_tolerance = motor_profile.stall_tolerance,
+            .calibration_voltage = motor_profile.calibration_voltage,
             .en_pin = GpioPin(DRV_WAKE_GPIO_Port, DRV_WAKE_Pin),
             .common = {
-                .ppairs = 14,
-                .gear_ratio = value_or_default(
-                    config_data.gear_ratio,
-                    VBDriveDefaults::GEAR_RATIO,
-                    static_cast<uint8_t>(0)
-                )
+                .ppairs = motor_profile.pole_pairs,
+                .gear_ratio = static_cast<uint8_t>(profile.gear_ratio)
             }
         },
         &htim1,
@@ -227,27 +233,19 @@ void create_motor(VBDriveConfig& config_data) {
         motor_inverter,
         motor_gate_driver,
         inductive_sensor,
-        config_data.angle_encoder
+        angle_encoder
     );
     HAL_Delay(100);
     motor->init();
 }
 
 bool is_able_to_calibrate() {
-    auto& app_manager = get_app_manager();
-    auto state = app_manager.get_state();
-    return (
-        state == CommandState::NOT_CALIBRATED ||
-        state == CommandState::RUNNING
-    );
+    return motor != nullptr;
 }
 
 bool do_calibrate() {
     // Stop all control
     motor->set_foc_point(FOCTarget{0});
-    auto& app_manager = get_app_manager();
-    app_manager.set_state(CommandState::NOT_CALIBRATED);
-
     joint_controller.calibration_started();
     calibration_data.reset();
     // NOTE: see app.h lines 20-21 for details on cyphal_queue_buffer_shared
@@ -258,7 +256,6 @@ bool do_calibrate() {
     motor_calibration_valid = true;
     joint_controller.calibration_finished(true);
 
-    app_manager.set_state(CommandState::RUNNING);
     return true;
 }
 
@@ -268,10 +265,6 @@ void apply_calibration() {
         HAL_IMPORTANT(eeprom.read<CalibrationData>(&calibration_data, CALIBRATION_PLACEMENT))
     }
     if (calibration_data.type_id != CalibrationData::TYPE_ID || !calibration_data.was_calibrated) {
-        auto& app_manager = get_app_manager();
-        char warning_message[] = "Motor is not calibrated! Movement forbidden\n\r\0";
-        app_manager.send_message_blocking(warning_message);
-        app_manager.set_state(CommandState::NOT_CALIBRATED);
         joint_controller.configuration_loaded(false);
         return;
     }
@@ -280,7 +273,6 @@ void apply_calibration() {
     joint_controller.configuration_loaded(true);
 }
 
-static void persist_pending_config_if_needed();
 static void reboot_to_bootloader_if_requested();
 
 void app() {
@@ -290,46 +282,17 @@ void app() {
 //#pragma region StartupConfiguration
     start_timers();
     eeprom.wait_until_available();
-    auto& app_manager = get_app_manager();
-    app_manager.init();
-    auto& config_data = app_manager.get_config();
-    constexpr auto& joint_profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
-    if (config_data.node_id != joint_profile.node_id) {
-        config_data.node_id = joint_profile.node_id;
-        HAL_IMPORTANT(eeprom.write<VBDriveConfig>(&config_data, CONFIG_PLACEMENT))
-    }
-    if (!app_manager.is_app_running() && config_data.are_required_params_set()) {
-        config_data.was_configured = true;
-        app_manager.set_state(CommandState::RUNNING);
-    }
-
     // Bring up the fixed FDCAN transport before the motor stack. This is the
     // same ordering as the communication bootstrap, so motor initialization
     // cannot alter or delay CAN startup.
     start_cyphal();
 
-    if (!app_manager.is_app_running()) {
-        // Bring up Cyphal even with blank EEPROM so config can be restored over CAN.
-        if (config_data.node_id == 0) {
-            config_data.node_id = joint_profile.node_id;
-        }
-        set_cyphal_mode(uavcan_node_Mode_1_0_MAINTENANCE);
-        while (true) {
-            can_fault_monitor.poll();
-            cyphal_loop();
-            persist_pending_config_if_needed();
-            reboot_to_bootloader_if_requested();
-            if (app_manager.is_app_running()) {
-                HAL_NVIC_SystemReset();
-            }
-        }
-    }
-
     setup_cordic();
-    create_motor(config_data);
+    create_motor();
     motor->start();
     apply_calibration();
     motor->set_foc_point(FOCTarget{0});
+    fault_manager.initialize();
 
     // Warm up
     for (uint8_t i = 0; i < 32; ++i) {
@@ -347,14 +310,11 @@ void app() {
     #ifdef STACK_PROFILE
     static millis stack_measurement_time = 0;
     #endif
-    static millis logging_time = 0;
 
     while(true) {
         can_fault_monitor.poll();
-        if (app_manager.is_app_running()) {
-            cyphal_loop();
-            persist_pending_config_if_needed();
-        }
+        update_fault_manager();
+        cyphal_loop();
         reboot_to_bootloader_if_requested();
 
         millis current_time = millis_32();
@@ -365,17 +325,6 @@ void app() {
         })
         #endif
 
-        EACH_N(current_time, logging_time, 100, {
-            if (app_manager.is_logging()) {
-                app_manager.send_message_blocking(
-                    "rotor: %6u shaft :%6u angle: %6.2f velocity: %6.2f\r\n",
-                    motor->get_rotor_encoder_value(),
-                    motor->get_shaft_encoder_value(),
-                    motor->get_angle(),
-                    motor->get_velocity()
-                );
-            }
-        })
     }
 }
 
@@ -388,18 +337,6 @@ static constexpr CanardPortID FOC_COMMAND_PORT = ruka3::protocol::kMitCommandBas
 static constexpr CanardPortID FOC_STATE_PORT =
     ruka3::joint_profile(RUKA3_JOINT_INDEX).feedback_subject_id;
 static constexpr CanardPortID SPECIFIC_CONTROL_PORT = ruka3::protocol::kSpecificControlBase;
-
-static bool config_save_pending = false;
-
-static void persist_pending_config_if_needed() {
-    if (!config_save_pending) {
-        return;
-    }
-    config_save_pending = false;
-    auto& config = get_app_manager().get_config();
-    config.was_configured = config.are_required_params_set();
-    HAL_IMPORTANT(get_eeprom().write<VBDriveConfig>(&config, CONFIG_PLACEMENT))
-}
 
 static void reboot_to_bootloader_if_requested() {
     if (!bootloader_reboot_pending) {
@@ -432,7 +369,7 @@ void in_loop_reporting(millis current_t) {
         state_msg.mcu_temp.kelvin = motor_inverter.get_mcu_temperature() + KELVIN_OFFSET;
         state_msg.stator_temp.kelvin = motor_inverter.get_stator_temperature() + KELVIN_OFFSET;
 
-        state_msg.has_fault.value = false; // TODO: fault check
+        state_msg.has_fault.value = get_fault_snapshot().level == ruka3::FaultLevel::fault;
 
         static CanardTransferID state_transfer_id = 0;
         get_interface()->send_msg(&state_msg, FOC_STATE_PORT, &state_transfer_id);
@@ -550,20 +487,11 @@ static void handle_parameter_register(
             case ParameterType::STRING:
                 break;
         }
-        if (parsed) {
-            auto& config = get_app_manager().get_config();
-            const auto write_result = definition.is_persistent
-                ? write_persistent_parameter(config, definition.id, requested, motor != nullptr)
-                : write_runtime_parameter(definition.id, requested);
-            if (write_result == ParameterWriteResult::OK && definition.is_persistent) {
-                config.was_configured = config.are_required_params_set();
-                config_save_pending = true;
-            }
-        }
+        if (parsed) (void)write_runtime_parameter(definition.id, requested);
     }
 
     ParameterValue current{};
-    if (!read_parameter(get_app_manager().get_config(), definition.id, current)) {
+    if (!read_parameter(definition.id, current)) {
         v_out._tag_ = REGISTER_EMPTY_TAG;
         v_out.empty = {};
         return;
@@ -598,7 +526,7 @@ void setup_subscriptions() {
         FDCAN_REJECT_REMOTE
     );
 
-    const auto node_id = get_app_manager().get_node_id();
+    constexpr auto node_id = ruka3::joint_profile(RUKA3_JOINT_INDEX).node_id;
     registers_handler.create(
         StaticRegisters<PARAMETER_CATALOG.size()>{PARAMETER_NAMES, handle_parameter_register},
         cyphal_interface

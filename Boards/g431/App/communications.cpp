@@ -1,4 +1,5 @@
 #include "app.h"
+#include "robot_config.h"
 
 #include <cyphal/node/node_info_handler.h>
 #include <cyphal/node/registers_handler.hpp>
@@ -104,7 +105,7 @@ std::byte cyphal_queue_buffer_shared[SHARED_BUFFER_SIZE] __attribute__((aligned(
 void start_cyphal() {
     cyphal_interface = std::shared_ptr<CyphalInterface>(CyphalInterface::create_bss<G4CAN, O1Allocator>(
         cyphal_bss_buffer,
-        get_app_manager().get_node_id(),
+        ruka3::joint_profile(RUKA3_JOINT_INDEX).node_id,
         &hfdcan1,
         CYPHAL_QUEUE_SIZE,
         utilities,
@@ -126,6 +127,10 @@ void start_cyphal() {
 
 void set_cyphal_mode(uint8_t mode) {
     CYPHAL_MODE = mode;
+}
+
+void set_cyphal_health(uint8_t health) {
+    CYPHAL_HEALTH_STATUS = health;
 }
 
 __weak void setup_subscriptions() {
