@@ -56,6 +56,11 @@ struct CommandTuning {
     std::int32_t register_position_deadband_ticks;
 };
 
+struct ObserverProfile {
+    std::uint32_t output_encoder_cpr;
+    float output_velocity_lpf;
+};
+
 struct JointProfile {
     std::uint8_t index;
     Board board;
@@ -78,6 +83,7 @@ struct JointProfile {
     MotorProfile motor;
     SafetyProfile safety;
     CommandTuning command;
+    ObserverProfile observer;
 };
 
 inline constexpr SafetyProfile kDefaultSafetyProfile{
@@ -97,6 +103,7 @@ inline constexpr CommandTuning kDefaultCommandTuning{
     .register_position_max_voltage = 1.2F,
     .register_position_deadband_ticks = 8,
 };
+inline constexpr ObserverProfile kDefaultObserverProfile{65536U, 0.1F};
 
 inline constexpr MotorProfile kG474MotorProfile{
     .control_period_s = 0.00005F, .torque_const = 0.011F,
@@ -126,12 +133,12 @@ inline constexpr MotorProfile kG431MotorProfile{
 // This table is the only CAN identity authority for all six joints.
 // Calibration offsets remain in the board-specific persistent record.
 inline constexpr JointProfile kJointProfiles[] = {
-    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
-    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
-    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
-    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
-    {5, Board::g431, 105, 1001, 1125, 1135, 36.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
-    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0, 52076, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
+    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
+    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
+    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
+    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
+    {5, Board::g431, 105, 1001, 1125, 1135, 36.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
+    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0, 52076, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
 };
 
 constexpr bool motor_profile_is_valid(const MotorProfile& profile) {

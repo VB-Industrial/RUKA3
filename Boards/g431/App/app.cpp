@@ -36,6 +36,7 @@
 #include <voltbro/utils.hpp>
 #include "robot_config.h"
 #include "joint_controller.hpp"
+#include "output_state_observer.hpp"
 #include "parameters.hpp"
 #include "protocol.h"
 //#pragma endregion
@@ -129,6 +130,12 @@ static ruka3::JointController joint_controller;
 static ruka3::CanFaultMonitor can_fault_monitor{hfdcan1};
 static ruka3::CommandSupervisor command_supervisor;
 static ruka3::FaultManager fault_manager;
+static ruka3::OutputStateObserver output_observer({
+    ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.output_encoder_cpr,
+    ruka3::joint_profile(RUKA3_JOINT_INDEX).output_encoder_zero,
+    ruka3::joint_profile(RUKA3_JOINT_INDEX).output_encoder_sign,
+    ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.output_velocity_lpf,
+});
 VBDrive* get_motor() {
     return motor;
 }
@@ -144,6 +151,7 @@ const ruka3::CommandSnapshot& get_command_snapshot() {
 uint32_t get_joint_state() {
     return static_cast<uint32_t>(joint_controller.state());
 }
+const ruka3::OutputObserverSnapshot& get_output_observer_snapshot() { return output_observer.snapshot(); }
 bool set_motor_enabled(bool enabled) {
     if (!motor) return false;
     if (!enabled) {
@@ -357,6 +365,7 @@ void app() {
     #endif
 
     while(true) {
+        output_observer.update(millis_32(), motor->get_shaft_encoder_value(), motor->get_angle());
         can_fault_monitor.poll();
         if (command_supervisor.update(millis_32())) {
             // A command source has to explicitly re-enable the bridge after a

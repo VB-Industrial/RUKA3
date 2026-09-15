@@ -11,6 +11,7 @@
 #include "can_fault_monitor.hpp"
 #include "command_supervisor.hpp"
 #include "fault_manager.hpp"
+#include "output_state_observer.hpp"
 
 // state_manager.hpp
 // CALIBRATION_PLACEMENT
@@ -49,6 +50,7 @@ const ruka3::CanFaultSnapshot& get_can_fault_snapshot();
 const ruka3::FaultSnapshot& get_fault_snapshot();
 const ruka3::CommandSnapshot& get_command_snapshot();
 uint32_t get_joint_state();
+const ruka3::OutputObserverSnapshot& get_output_observer_snapshot();
 bool set_motor_enabled(bool enabled);
 bool acknowledge_faults();
 EEPROM& get_eeprom();

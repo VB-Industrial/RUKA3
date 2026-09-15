@@ -17,6 +17,7 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
     const auto& can_faults = get_can_fault_snapshot();
     const auto& command = get_command_snapshot();
     const auto& faults = get_fault_snapshot();
+    const auto& output = get_output_observer_snapshot();
     switch (id) {
         case ParameterId::NODE_ID: value.emplace<uint32_t>(ruka3::joint_profile(RUKA3_JOINT_INDEX).node_id); return true;
         case ParameterId::BOOTLOADER: value.emplace<bool>(bootloader_reboot_pending); return true;
@@ -31,6 +32,9 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::NET_STATE: value.emplace<uint32_t>(static_cast<uint32_t>(faults.network_state)); return true;
         case ParameterId::FAULT_ACK: value.emplace<bool>(false); return true;
         case ParameterId::JOINT_STATE: value.emplace<uint32_t>(get_joint_state()); return true;
+        case ParameterId::OUT_ANGLE: value.emplace<float>(output.encoder_angle); return true;
+        case ParameterId::OUT_VELOCITY: value.emplace<float>(output.output_velocity); return true;
+        case ParameterId::OUT_RESIDUAL: value.emplace<float>(output.motor_residual); return true;
         case ParameterId::CAN_ERR_TOTAL: value.emplace<uint32_t>(can_faults.session_error_count); return true;
         case ParameterId::CAN_RX_ERR: value.emplace<uint32_t>(can_faults.rx_error_count); return true;
         case ParameterId::CAN_TX_ERR: value.emplace<uint32_t>(can_faults.tx_error_count); return true;

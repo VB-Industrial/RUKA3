@@ -17,6 +17,7 @@ enum class ParameterId : uint8_t {
     CMD_COUNT, CMD_AGE_MS, CMD_TIMEOUT,
     FAULT_ACTIVE, FAULT_LATCHED, FAULT_LEVEL, STOP_REASON, NET_STATE, FAULT_ACK,
     JOINT_STATE,
+    OUT_ANGLE, OUT_VELOCITY, OUT_RESIDUAL,
 };
 
 struct ParameterDefinition {
@@ -30,7 +31,7 @@ struct ParameterDefinition {
 using ParameterValue = std::variant<uint32_t, int32_t, float, bool, std::string_view>;
 enum class ParameterWriteResult : uint8_t { OK, READ_ONLY, INVALID, UNAVAILABLE };
 
-inline constexpr std::array<ParameterDefinition, 36> PARAMETER_CATALOG{{
+inline constexpr std::array<ParameterDefinition, 39> PARAMETER_CATALOG{{
     {ParameterId::NODE_ID,         "node_id",       ParameterType::NATURAL32, false, false},
     {ParameterId::IS_ON,           "is_on",         ParameterType::BIT,       true,  false},
     {ParameterId::BOOTLOADER,      "bootloader",    ParameterType::BIT,       true,  false},
@@ -67,6 +68,9 @@ inline constexpr std::array<ParameterDefinition, 36> PARAMETER_CATALOG{{
     {ParameterId::NET_STATE,       "net_state",     ParameterType::NATURAL32, false, false},
     {ParameterId::FAULT_ACK,       "fault_ack",     ParameterType::BIT,       true,  false},
     {ParameterId::JOINT_STATE,     "joint_state",   ParameterType::NATURAL32, false, false},
+    {ParameterId::OUT_ANGLE,       "out_angle",     ParameterType::REAL32,    false, false},
+    {ParameterId::OUT_VELOCITY,    "out_velocity",  ParameterType::REAL32,    false, false},
+    {ParameterId::OUT_RESIDUAL,    "out_residual",  ParameterType::REAL32,    false, false},
 }};
 
 consteval bool parameter_catalog_is_valid() {
