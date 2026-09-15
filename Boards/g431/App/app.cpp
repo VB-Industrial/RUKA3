@@ -380,6 +380,11 @@ static constexpr CanardPortID FOC_STATE_PORT =
     ruka3::joint_profile(RUKA3_JOINT_INDEX).feedback_subject_id;
 static constexpr CanardPortID SPECIFIC_CONTROL_PORT = ruka3::protocol::kSpecificControlBase;
 
+static bool is_voltage_target_valid(float voltage) {
+    constexpr auto& motor_profile = ruka3::joint_profile(RUKA3_JOINT_INDEX).motor;
+    return std::isfinite(voltage) && std::fabs(voltage) <= motor_profile.max_voltage;
+}
+
 static void reboot_to_bootloader_if_requested() {
     if (!bootloader_reboot_pending) {
         return;
@@ -465,7 +470,8 @@ public:
                 is_valid = motor->set_angle_point(msg.set_point_value);
                 break;
             case voltbro_foc_specific_control_1_0_VOLTAGE:
-                is_valid = motor->set_voltage_point(msg.set_point_value);
+                is_valid = is_voltage_target_valid(msg.set_point_value) &&
+                    motor->set_voltage_point(msg.set_point_value);
                 break;
             default:
                 break;

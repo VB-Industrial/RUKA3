@@ -89,6 +89,35 @@ inline constexpr JointProfile kJointProfiles[] = {
     {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0,     0, -1, kG431MotorProfile},
 };
 
+constexpr bool motor_profile_is_valid(const MotorProfile& profile) {
+    const bool position_limits_disabled =
+        profile.position_lower_limit == 0.0F && profile.position_upper_limit == 0.0F;
+    const bool position_limits_valid = position_limits_disabled ||
+        profile.position_lower_limit < profile.position_upper_limit;
+    return profile.control_period_s > 0.0F &&
+           profile.torque_const > 0.0F &&
+           profile.current_limit > 0.0F &&
+           profile.torque_limit > 0.0F &&
+           profile.speed_limit >= 0.0F &&
+           profile.max_voltage > 0.0F &&
+           (profile.position_direction == -1 || profile.position_direction == 1) &&
+           profile.stall_current > 0.0F &&
+           profile.stall_timeout_s >= 0.0F &&
+           profile.pole_pairs > 0U && position_limits_valid;
+}
+
+constexpr bool joint_profiles_are_valid() {
+    for (const auto& profile : kJointProfiles) {
+        if (profile.index == 0U || profile.node_id == 0U || profile.gear_ratio <= 0.0F ||
+            !motor_profile_is_valid(profile.motor)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(joint_profiles_are_valid());
+
 constexpr const JointProfile& joint_profile(const std::uint8_t index) {
     return kJointProfiles[index - 1U];
 }
