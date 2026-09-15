@@ -78,6 +78,17 @@ inline constexpr MotorProfile kG431MotorProfile{
     .pole_pairs = 14, .position_source = PositionSource::rotor,
 };
 
+constexpr MotorProfile with_position_limits(MotorProfile profile, float lower, float upper) {
+    profile.position_lower_limit = lower;
+    profile.position_upper_limit = upper;
+    return profile;
+}
+
+// J6 zero is the commissioned current mechanical position.  Keep a one-degree
+// margin to the nominal half-turn stops on each side.
+inline constexpr MotorProfile kJ6MotorProfile =
+    with_position_limits(kG431MotorProfile, -3.12413936F, 3.12413936F);
+
 // This table is the only CAN identity authority for all six joints.
 // Calibration offsets remain in the board-specific persistent record.
 inline constexpr JointProfile kJointProfiles[] = {
@@ -86,7 +97,7 @@ inline constexpr JointProfile kJointProfiles[] = {
     {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, kG474MotorProfile},
     {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, kG474MotorProfile},
     {5, Board::g431, 105, 1001, 1125, 1135, 36.0F,  1, -1,  1,    0,     0, -1, kG431MotorProfile},
-    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0,     0, -1, kG431MotorProfile},
+    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0,     0, -1, kJ6MotorProfile},
 };
 
 constexpr bool motor_profile_is_valid(const MotorProfile& profile) {
