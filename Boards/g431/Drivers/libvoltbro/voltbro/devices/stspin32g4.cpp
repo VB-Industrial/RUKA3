@@ -38,6 +38,16 @@ HAL_StatusTypeDef STSPIN32G4::clear_faults() const {
 HAL_StatusTypeDef STSPIN32G4::wake(uint32_t timeout_ms) const {
     wake_pin.set();
 
+    // A failed standby transaction may leave the STM32 I2C peripheral disabled
+    // even though its clock remains running.  Re-enable it before probing the
+    // gate driver again, otherwise every subsequent arm attempt will fail.
+    if ((hi2c->Instance->CR1 & I2C_CR1_PE) == 0U) {
+        const HAL_StatusTypeDef init_status = HAL_I2C_Init(hi2c);
+        if (init_status != HAL_OK) {
+            return init_status;
+        }
+    }
+
     const uint32_t start_tick = HAL_GetTick();
     HAL_StatusTypeDef status = HAL_ERROR;
     do {
