@@ -86,7 +86,7 @@ inline constexpr JointProfile kJointProfiles[] = {
     {5, Board::g431, 105, 1001, 1125, 1135, 36.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG431MotorProfile},
     // J6 zero is the commissioned current mechanical position.  Keep a
     // one-degree margin to the nominal half-turn stops on each side.
-    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile},
+    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0, 52076, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile},
 };
 
 constexpr bool motor_profile_is_valid(const MotorProfile& profile) {
