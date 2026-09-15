@@ -15,6 +15,7 @@ void record_invalid_command() { invalid_commands_counter += 1; }
 bool read_parameter(ParameterId id, ParameterValue& value) {
     value = {};
     const auto& can_faults = get_can_fault_snapshot();
+    const auto& command = get_command_snapshot();
     const auto& faults = get_fault_snapshot();
     switch (id) {
         case ParameterId::NODE_ID: value.emplace<uint32_t>(ruka3::joint_profile(RUKA3_JOINT_INDEX).node_id); return true;
@@ -38,6 +39,9 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::CAN_WARNING: value.emplace<bool>(can_faults.warning); return true;
         case ParameterId::CAN_PASSIVE: value.emplace<bool>(can_faults.error_passive); return true;
         case ParameterId::CAN_BUS_OFF: value.emplace<bool>(can_faults.bus_off); return true;
+        case ParameterId::CMD_COUNT: value.emplace<uint32_t>(command.accepted_count); return true;
+        case ParameterId::CMD_AGE_MS: value.emplace<uint32_t>(command.age_ms); return true;
+        case ParameterId::CMD_TIMEOUT: value.emplace<bool>(command.timed_out); return true;
         default: break;
     }
     auto* motor = get_motor();

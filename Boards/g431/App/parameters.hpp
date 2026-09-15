@@ -14,6 +14,7 @@ enum class ParameterId : uint8_t {
     ELECTRIC_ANGLE,
     CAN_ERR_TOTAL, CAN_RX_ERR, CAN_TX_ERR, CAN_ERR_LOG, CAN_ARB_LEC,
     CAN_DATA_LEC, CAN_WARNING, CAN_PASSIVE, CAN_BUS_OFF,
+    CMD_COUNT, CMD_AGE_MS, CMD_TIMEOUT,
     FAULT_ACTIVE, FAULT_LATCHED, FAULT_LEVEL, STOP_REASON, NET_STATE, FAULT_ACK,
 };
 
@@ -28,7 +29,7 @@ struct ParameterDefinition {
 using ParameterValue = std::variant<uint32_t, int32_t, float, bool, std::string_view>;
 enum class ParameterWriteResult : uint8_t { OK, READ_ONLY, INVALID, UNAVAILABLE };
 
-inline constexpr std::array<ParameterDefinition, 32> PARAMETER_CATALOG{{
+inline constexpr std::array<ParameterDefinition, 35> PARAMETER_CATALOG{{
     {ParameterId::NODE_ID,         "node_id",       ParameterType::NATURAL32, false, false},
     {ParameterId::IS_ON,           "is_on",         ParameterType::BIT,       true,  false},
     {ParameterId::BOOTLOADER,      "bootloader",    ParameterType::BIT,       true,  false},
@@ -55,6 +56,9 @@ inline constexpr std::array<ParameterDefinition, 32> PARAMETER_CATALOG{{
     {ParameterId::CAN_WARNING,     "can_warning",   ParameterType::BIT,       false, false},
     {ParameterId::CAN_PASSIVE,     "can_passive",   ParameterType::BIT,       false, false},
     {ParameterId::CAN_BUS_OFF,     "can_bus_off",   ParameterType::BIT,       false, false},
+    {ParameterId::CMD_COUNT,       "cmd_count",     ParameterType::NATURAL32, false, false},
+    {ParameterId::CMD_AGE_MS,      "cmd_age_ms",    ParameterType::NATURAL32, false, false},
+    {ParameterId::CMD_TIMEOUT,     "cmd_timeout",   ParameterType::BIT,       false, false},
     {ParameterId::FAULT_ACTIVE,    "fault_active",  ParameterType::NATURAL32, false, false},
     {ParameterId::FAULT_LATCHED,   "fault_latched", ParameterType::NATURAL32, false, false},
     {ParameterId::FAULT_LEVEL,     "fault_level",   ParameterType::NATURAL32, false, false},

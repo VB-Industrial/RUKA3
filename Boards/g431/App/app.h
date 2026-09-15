@@ -9,6 +9,7 @@
 
 #include "state_manager.hpp"
 #include "can_fault_monitor.hpp"
+#include "command_supervisor.hpp"
 #include "fault_manager.hpp"
 
 // state_manager.hpp
@@ -46,6 +47,7 @@ void start_timers();
 VBDrive* get_motor();
 const ruka3::CanFaultSnapshot& get_can_fault_snapshot();
 const ruka3::FaultSnapshot& get_fault_snapshot();
+const ruka3::CommandSnapshot& get_command_snapshot();
 bool acknowledge_faults();
 EEPROM& get_eeprom();
 bool is_motor_calibrated();

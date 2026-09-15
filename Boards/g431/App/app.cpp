@@ -127,6 +127,7 @@ static VBDrive* motor = nullptr;
 static bool motor_calibration_valid = false;
 static ruka3::JointController joint_controller;
 static ruka3::CanFaultMonitor can_fault_monitor{hfdcan1};
+static ruka3::CommandSupervisor command_supervisor;
 static ruka3::FaultManager fault_manager;
 VBDrive* get_motor() {
     return motor;
@@ -136,6 +137,9 @@ const ruka3::CanFaultSnapshot& get_can_fault_snapshot() {
 }
 const ruka3::FaultSnapshot& get_fault_snapshot() {
     return fault_manager.snapshot();
+}
+const ruka3::CommandSnapshot& get_command_snapshot() {
+    return command_supervisor.snapshot();
 }
 
 bool acknowledge_faults() {
@@ -292,6 +296,7 @@ void app() {
     motor->start();
     apply_calibration();
     motor->set_foc_point(FOCTarget{0});
+    command_supervisor.initialize(millis_32());
     fault_manager.initialize();
 
     // Warm up
@@ -313,6 +318,7 @@ void app() {
 
     while(true) {
         can_fault_monitor.poll();
+        command_supervisor.update(millis_32());
         update_fault_manager();
         cyphal_loop();
         reboot_to_bootloader_if_requested();
@@ -393,6 +399,8 @@ public:
         });
         if (!is_valid) {
             record_invalid_command();
+        } else {
+            command_supervisor.note_accepted_command(millis_32());
         }
     }
 };
@@ -428,6 +436,8 @@ public:
         }
         if (!is_valid) {
             record_invalid_command();
+        } else {
+            command_supervisor.note_accepted_command(millis_32());
         }
     }
 };
