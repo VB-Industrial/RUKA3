@@ -150,7 +150,10 @@ bool acknowledge_faults() {
 }
 
 static void update_fault_manager() {
-    const bool driver_fault = HAL_GPIO_ReadPin(DRV_FAULT_GPIO_Port, DRV_FAULT_Pin) == GPIO_PIN_RESET;
+    // STSPIN asserts DRV_FAULT while it is deliberately held in standby.
+    // A disabled bridge is therefore an expected state, not a hardware fault.
+    const bool driver_fault = motor->is_on() &&
+        (HAL_GPIO_ReadPin(DRV_FAULT_GPIO_Port, DRV_FAULT_Pin) == GPIO_PIN_RESET);
     if (fault_manager.update(can_fault_monitor.snapshot(), motor_calibration_valid, driver_fault)) {
         motor->set_foc_point(FOCTarget{0});
         motor->set_state(false);
@@ -318,7 +321,12 @@ void app() {
 
     while(true) {
         can_fault_monitor.poll();
-        command_supervisor.update(millis_32());
+        if (command_supervisor.update(millis_32())) {
+            // A command source has to explicitly re-enable the bridge after a
+            // supervision stop; stale torque/position commands are never reused.
+            motor->set_foc_point(FOCTarget{0});
+            motor->set_state(false);
+        }
         update_fault_manager();
         cyphal_loop();
         reboot_to_bootloader_if_requested();

@@ -28,10 +28,14 @@ public:
         received_command_ = true;
     }
 
-    void update(std::uint32_t now_ms) {
+    // Returns true once on the transition into timeout.
+    bool update(std::uint32_t now_ms) {
         if (!initialized_) initialize(now_ms);
         snapshot_.age_ms = now_ms - last_command_ms_;
-        snapshot_.timed_out = received_command_ && snapshot_.age_ms > kTimeoutMs;
+        const bool timed_out = received_command_ && snapshot_.age_ms > kTimeoutMs;
+        const bool entered_timeout = timed_out && !snapshot_.timed_out;
+        snapshot_.timed_out = timed_out;
+        return entered_timeout;
     }
 
     [[nodiscard]] const CommandSnapshot& snapshot() const { return snapshot_; }
