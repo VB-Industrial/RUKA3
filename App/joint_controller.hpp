@@ -39,7 +39,7 @@ public:
     }
 
     [[nodiscard]] bool accepts_motor_commands() const {
-        return state_ == JointState::ready || state_ == JointState::armed;
+        return state_ == JointState::armed;
     }
 
     [[nodiscard]] JointState state() const { return state_; }

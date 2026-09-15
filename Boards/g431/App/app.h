@@ -48,6 +48,8 @@ VBDrive* get_motor();
 const ruka3::CanFaultSnapshot& get_can_fault_snapshot();
 const ruka3::FaultSnapshot& get_fault_snapshot();
 const ruka3::CommandSnapshot& get_command_snapshot();
+uint32_t get_joint_state();
+bool set_motor_enabled(bool enabled);
 bool acknowledge_faults();
 EEPROM& get_eeprom();
 bool is_motor_calibrated();

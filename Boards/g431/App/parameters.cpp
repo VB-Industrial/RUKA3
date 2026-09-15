@@ -30,6 +30,7 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::STOP_REASON: value.emplace<uint32_t>(static_cast<uint32_t>(faults.stop_reason)); return true;
         case ParameterId::NET_STATE: value.emplace<uint32_t>(static_cast<uint32_t>(faults.network_state)); return true;
         case ParameterId::FAULT_ACK: value.emplace<bool>(false); return true;
+        case ParameterId::JOINT_STATE: value.emplace<uint32_t>(get_joint_state()); return true;
         case ParameterId::CAN_ERR_TOTAL: value.emplace<uint32_t>(can_faults.session_error_count); return true;
         case ParameterId::CAN_RX_ERR: value.emplace<uint32_t>(can_faults.rx_error_count); return true;
         case ParameterId::CAN_TX_ERR: value.emplace<uint32_t>(can_faults.tx_error_count); return true;
@@ -72,7 +73,6 @@ ParameterWriteResult write_runtime_parameter(ParameterId id, const ParameterValu
         return std::get<bool>(value) && acknowledge_faults() ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
     }
     if (id != ParameterId::IS_ON) return ParameterWriteResult::READ_ONLY;
-    auto* motor = get_motor();
-    if (!motor) return ParameterWriteResult::UNAVAILABLE;
-    return motor->set_state(std::get<bool>(value)) == HAL_OK ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    const bool requested_on = std::get<bool>(value);
+    return set_motor_enabled(requested_on) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
 }

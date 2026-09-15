@@ -141,6 +141,25 @@ const ruka3::FaultSnapshot& get_fault_snapshot() {
 const ruka3::CommandSnapshot& get_command_snapshot() {
     return command_supervisor.snapshot();
 }
+uint32_t get_joint_state() {
+    return static_cast<uint32_t>(joint_controller.state());
+}
+bool set_motor_enabled(bool enabled) {
+    if (!motor) return false;
+    if (!enabled) {
+        motor->set_foc_point(FOCTarget{0});
+        joint_controller.disarm();
+        return motor->set_state(false) == HAL_OK;
+    }
+    if (!motor_calibration_valid || !joint_controller.arm()) {
+        return false;
+    }
+    if (motor->set_state(true) == HAL_OK) {
+        return true;
+    }
+    joint_controller.disarm();
+    return false;
+}
 
 bool acknowledge_faults() {
     if (!fault_manager.acknowledge()) {
@@ -254,6 +273,10 @@ bool do_calibrate() {
     // Stop all control
     motor->set_foc_point(FOCTarget{0});
     joint_controller.calibration_started();
+    if (motor->set_state(true) != HAL_OK) {
+        joint_controller.calibration_finished(false);
+        return false;
+    }
     calibration_data.reset();
     // NOTE: see app.h lines 20-21 for details on cyphal_queue_buffer_shared
     motor->calibrate(calibration_data, cyphal_queue_buffer_shared, SHARED_BUFFER_SIZE);
@@ -262,6 +285,8 @@ bool do_calibrate() {
     motor->apply_calibration(calibration_data);
     motor_calibration_valid = true;
     joint_controller.calibration_finished(true);
+    motor->set_foc_point(FOCTarget{0});
+    motor->set_state(false);
 
     return true;
 }
@@ -299,6 +324,9 @@ void app() {
     motor->start();
     apply_calibration();
     motor->set_foc_point(FOCTarget{0});
+    // Commissioned calibration makes the joint ready, but it is never armed
+    // merely by booting.  A controller must explicitly write is_on=true.
+    motor->set_state(false);
     command_supervisor.initialize(millis_32());
     fault_manager.initialize();
 
@@ -325,7 +353,7 @@ void app() {
             // A command source has to explicitly re-enable the bridge after a
             // supervision stop; stale torque/position commands are never reused.
             motor->set_foc_point(FOCTarget{0});
-            motor->set_state(false);
+            set_motor_enabled(false);
         }
         update_fault_manager();
         cyphal_loop();
