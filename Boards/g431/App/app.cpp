@@ -231,13 +231,13 @@ void create_motor() {
         DriveRuntimeConfig {
             .user_current_limit = motor_profile.current_limit,
             .user_torque_limit = motor_profile.torque_limit,
-            .user_speed_limit = motor_profile.speed_limit > 0.0F ? motor_profile.speed_limit : NAN,
-            .user_position_lower_limit = (motor_profile.position_lower_limit == 0.0F && motor_profile.position_upper_limit == 0.0F)
-                ? NAN : motor_profile.position_lower_limit,
-            .user_position_upper_limit = (motor_profile.position_lower_limit == 0.0F && motor_profile.position_upper_limit == 0.0F)
-                ? NAN : motor_profile.position_upper_limit,
-            .user_angle_offset = motor_profile.position_offset,
-            .user_angle_direction = motor_profile.position_direction
+            .user_speed_limit = profile.speed_limit > 0.0F ? profile.speed_limit : NAN,
+            .user_position_lower_limit = (profile.position_lower_limit == 0.0F && profile.position_upper_limit == 0.0F)
+                ? NAN : profile.position_lower_limit,
+            .user_position_upper_limit = (profile.position_lower_limit == 0.0F && profile.position_upper_limit == 0.0F)
+                ? NAN : profile.position_upper_limit,
+            .user_angle_offset = profile.position_offset,
+            .user_angle_direction = profile.position_direction
         },
         // Built-in constant parameters
         DriveInfo {

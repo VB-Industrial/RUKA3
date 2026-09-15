@@ -12,12 +12,7 @@ struct MotorProfile {
     float torque_const;
     float current_limit;
     float torque_limit;
-    float speed_limit;
     float max_voltage;
-    float position_offset;
-    float position_lower_limit;
-    float position_upper_limit;
-    std::int8_t position_direction;
     float stall_current;
     float stall_timeout_s;
     float stall_tolerance;
@@ -48,13 +43,17 @@ struct JointProfile {
     std::uint16_t motor_electrical_offset;
     std::uint16_t output_encoder_zero;
     std::int8_t dh_rotation;
+    float speed_limit;
+    float position_offset;
+    float position_lower_limit;
+    float position_upper_limit;
+    std::int8_t position_direction;
     MotorProfile motor;
 };
 
 inline constexpr MotorProfile kG474MotorProfile{
     .control_period_s = 0.00005F, .torque_const = 0.011F,
-    .current_limit = 22.0F, .torque_limit = 10.0F, .speed_limit = 0.0F, .max_voltage = 50.0F,
-    .position_offset = 0.0F, .position_lower_limit = 0.0F, .position_upper_limit = 0.0F, .position_direction = 1,
+    .current_limit = 22.0F, .torque_limit = 10.0F, .max_voltage = 50.0F,
     .stall_current = 22.0F, .stall_timeout_s = 3.0F, .stall_tolerance = 0.2F,
     .calibration_voltage = 1.0F, .current_pid_kp = 2.0F, .current_pid_ki = 600.0F,
     .current_pid_kd = 0.0F, .filter_expected_a = 0.0F,
@@ -68,8 +67,7 @@ inline constexpr MotorProfile kG474MotorProfile{
 // read from EEPROM.
 inline constexpr MotorProfile kG431MotorProfile{
     .control_period_s = 0.000025F, .torque_const = 1.0F,
-    .current_limit = 2.0F, .torque_limit = 30.0F, .speed_limit = 0.0F, .max_voltage = 50.0F,
-    .position_offset = 0.0F, .position_lower_limit = 0.0F, .position_upper_limit = 0.0F, .position_direction = 1,
+    .current_limit = 2.0F, .torque_limit = 30.0F, .max_voltage = 50.0F,
     .stall_current = 6.0F, .stall_timeout_s = 3.0F, .stall_tolerance = 0.2F,
     .calibration_voltage = 0.2F, .current_pid_kp = 4.0F, .current_pid_ki = 1600.0F,
     .current_pid_kd = 0.0F, .filter_expected_a = 0.0F,
@@ -78,48 +76,40 @@ inline constexpr MotorProfile kG431MotorProfile{
     .pole_pairs = 14, .position_source = PositionSource::rotor,
 };
 
-constexpr MotorProfile with_position_limits(MotorProfile profile, float lower, float upper) {
-    profile.position_lower_limit = lower;
-    profile.position_upper_limit = upper;
-    return profile;
-}
-
-// J6 zero is the commissioned current mechanical position.  Keep a one-degree
-// margin to the nominal half-turn stops on each side.
-inline constexpr MotorProfile kJ6MotorProfile =
-    with_position_limits(kG431MotorProfile, -3.12413936F, 3.12413936F);
-
 // This table is the only CAN identity authority for all six joints.
 // Calibration offsets remain in the board-specific persistent record.
 inline constexpr JointProfile kJointProfiles[] = {
-    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, kG474MotorProfile},
-    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, kG474MotorProfile},
-    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, kG474MotorProfile},
-    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, kG474MotorProfile},
-    {5, Board::g431, 105, 1001, 1125, 1135, 36.0F,  1, -1,  1,    0,     0, -1, kG431MotorProfile},
-    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0,     0, -1, kJ6MotorProfile},
+    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile},
+    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile},
+    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile},
+    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile},
+    {5, Board::g431, 105, 1001, 1125, 1135, 36.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG431MotorProfile},
+    // J6 zero is the commissioned current mechanical position.  Keep a
+    // one-degree margin to the nominal half-turn stops on each side.
+    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile},
 };
 
 constexpr bool motor_profile_is_valid(const MotorProfile& profile) {
-    const bool position_limits_disabled =
-        profile.position_lower_limit == 0.0F && profile.position_upper_limit == 0.0F;
-    const bool position_limits_valid = position_limits_disabled ||
-        profile.position_lower_limit < profile.position_upper_limit;
     return profile.control_period_s > 0.0F &&
            profile.torque_const > 0.0F &&
            profile.current_limit > 0.0F &&
            profile.torque_limit > 0.0F &&
-           profile.speed_limit >= 0.0F &&
            profile.max_voltage > 0.0F &&
-           (profile.position_direction == -1 || profile.position_direction == 1) &&
            profile.stall_current > 0.0F &&
            profile.stall_timeout_s >= 0.0F &&
-           profile.pole_pairs > 0U && position_limits_valid;
+           profile.pole_pairs > 0U;
 }
 
 constexpr bool joint_profiles_are_valid() {
     for (const auto& profile : kJointProfiles) {
+        const bool position_limits_disabled =
+            profile.position_lower_limit == 0.0F && profile.position_upper_limit == 0.0F;
+        const bool position_limits_valid = position_limits_disabled ||
+            profile.position_lower_limit < profile.position_upper_limit;
         if (profile.index == 0U || profile.node_id == 0U || profile.gear_ratio <= 0.0F ||
+            profile.speed_limit < 0.0F ||
+            (profile.position_direction != -1 && profile.position_direction != 1) ||
+            !position_limits_valid ||
             !motor_profile_is_valid(profile.motor)) {
             return false;
         }

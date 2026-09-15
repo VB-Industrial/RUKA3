@@ -60,10 +60,10 @@ FOC& get_motor() {
             .current_limit = motor_profile.current_limit,
             .user_current_limit = motor_profile.current_limit,
             .user_torque_limit = motor_profile.torque_limit,
-            .user_position_lower_limit = (motor_profile.position_upper_limit == 0.0f && motor_profile.position_lower_limit == 0.0f)
-                ? -FLOAT_INF : motor_profile.position_lower_limit,
-            .user_position_upper_limit = (motor_profile.position_upper_limit == 0.0f && motor_profile.position_lower_limit == 0.0f)
-                ? FLOAT_INF : motor_profile.position_upper_limit,
+            .user_position_lower_limit = (profile.position_upper_limit == 0.0f && profile.position_lower_limit == 0.0f)
+                ? -FLOAT_INF : profile.position_lower_limit,
+            .user_position_upper_limit = (profile.position_upper_limit == 0.0f && profile.position_lower_limit == 0.0f)
+                ? FLOAT_INF : profile.position_upper_limit,
         },
         DriveInfo{
             .torque_const = motor_profile.torque_const,
@@ -82,7 +82,7 @@ FOC& get_motor() {
             .common = CommonDriverConfig{
                 .ppairs = motor_profile.pole_pairs,
                 .gear_ratio = static_cast<uint8_t>(profile.gear_ratio),
-                .user_angle_offset = motor_profile.position_offset,
+                .user_angle_offset = profile.position_offset,
             },
         },
         &htim1,
