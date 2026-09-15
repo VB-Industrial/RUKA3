@@ -58,9 +58,9 @@ const int NUMBER_OF_REGISTERS = 6;
 static float angle_in;
 static float vel_in;
 static float torque_in;
-static float position_feedback_gain_in = 0.5f;
-static float velocity_feedback_gain_in = 0.02f;
-static float torque_feedback_gain_in = 0.5f;
+static float position_feedback_gain_in = active_joint_profile.command.default_position_kp;
+static float velocity_feedback_gain_in = active_joint_profile.command.default_velocity_kp;
+static float torque_feedback_gain_in = active_joint_profile.command.default_torque_kp;
 
 static inline float apply_dh_rotation(float value) {
     return static_cast<float>(DH_rotation) * value;
@@ -168,22 +168,19 @@ public:
         const float position_error = wrap_pi(angle_in - current_angle);
         const float velocity_error = vel_in - current_velocity;
 
-        constexpr float kAcquireThreshold = 0.5f;
-        constexpr float kAcquireVoltage = 0.6f;
-        constexpr float kTrackMaxVoltage = 11.5f;
-        constexpr float kMaxVelocityFeedbackGain = 1.5f;
+        constexpr auto& tuning = active_joint_profile.command;
 
         float voltage_command = 0.0f;
-        if (std::fabs(position_error) > kAcquireThreshold) {
-            voltage_command = (position_error > 0.0f) ? kAcquireVoltage : -kAcquireVoltage;
+        if (std::fabs(position_error) > tuning.acquire_threshold_rad) {
+            voltage_command = (position_error > 0.0f) ? tuning.acquire_voltage : -tuning.acquire_voltage;
         } else {
             const float kp = position_feedback_gain_in;
-            const float kd = std::clamp(velocity_feedback_gain_in, 0.0f, kMaxVelocityFeedbackGain);
+            const float kd = std::clamp(velocity_feedback_gain_in, 0.0f, tuning.max_velocity_feedback_gain);
             const float ke = torque_feedback_gain_in;
             voltage_command = kp * position_error + kd * velocity_error + ke * torque_in;
         }
         voltage_command = static_cast<float>(motor_command_sign) *
-            std::clamp(voltage_command, -kTrackMaxVoltage, kTrackMaxVoltage);
+            std::clamp(voltage_command, -tuning.track_max_voltage, tuning.track_max_voltage);
         motor.set_voltage_point(voltage_command);
     }
 };
@@ -235,16 +232,14 @@ void set_pos_handler(
     RegisterAccessResponse::Type& response
 ) {
     FOC& motor = get_motor();
-    constexpr float kPosSetKp = 0.002f;
-    constexpr float kPosSetMaxVoltage = 1.2f;
-    constexpr int32_t kPosSetDeadbandTicks = 8;
+    constexpr auto& tuning = active_joint_profile.command;
 
     const auto clamp_voltage = [](float value) {
-        if (value > kPosSetMaxVoltage) {
-            return kPosSetMaxVoltage;
+        if (value > tuning.register_position_max_voltage) {
+            return tuning.register_position_max_voltage;
         }
-        if (value < -kPosSetMaxVoltage) {
-            return -kPosSetMaxVoltage;
+        if (value < -tuning.register_position_max_voltage) {
+            return -tuning.register_position_max_voltage;
         }
         return value;
     };
@@ -257,12 +252,12 @@ void set_pos_handler(
             while (true) {
                 const int32_t current_ticks = static_cast<int32_t>(get_gear_encoder().get_value());
                 const int32_t error_ticks = target_ticks - current_ticks;
-                if (error_ticks <= kPosSetDeadbandTicks && error_ticks >= -kPosSetDeadbandTicks) {
+                if (error_ticks <= tuning.register_position_deadband_ticks && error_ticks >= -tuning.register_position_deadband_ticks) {
                     motor.set_voltage_point(0.0f);
                     fill_register_i32(v_out, current_ticks);
                     break;
                 }
-                motor.set_voltage_point(clamp_voltage(static_cast<float>(error_ticks) * kPosSetKp));
+                motor.set_voltage_point(clamp_voltage(static_cast<float>(error_ticks) * tuning.register_position_kp));
                 HAL_Delay(1);
             }
         } else {

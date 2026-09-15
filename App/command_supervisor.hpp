@@ -14,10 +14,9 @@ struct CommandSnapshot {
 // timeout state but does not alter the motor target or drive enable yet.
 class CommandSupervisor {
 public:
-    static constexpr std::uint32_t kTimeoutMs = 1000U;
-
-    void initialize(std::uint32_t now_ms) {
+    void initialize(std::uint32_t now_ms, std::uint32_t timeout_ms) {
         last_command_ms_ = now_ms;
+        timeout_ms_ = timeout_ms;
         initialized_ = true;
         snapshot_ = {};
     }
@@ -30,9 +29,9 @@ public:
 
     // Returns true once on the transition into timeout.
     bool update(std::uint32_t now_ms) {
-        if (!initialized_) initialize(now_ms);
+        if (!initialized_) initialize(now_ms, timeout_ms_);
         snapshot_.age_ms = now_ms - last_command_ms_;
-        const bool timed_out = received_command_ && snapshot_.age_ms > kTimeoutMs;
+        const bool timed_out = received_command_ && snapshot_.age_ms > timeout_ms_;
         const bool entered_timeout = timed_out && !snapshot_.timed_out;
         snapshot_.timed_out = timed_out;
         return entered_timeout;
@@ -45,6 +44,7 @@ private:
     std::uint32_t last_command_ms_{};
     bool initialized_{};
     bool received_command_{};
+    std::uint32_t timeout_ms_{1000U};
 };
 
 }  // namespace ruka3

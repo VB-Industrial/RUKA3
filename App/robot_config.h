@@ -29,6 +29,33 @@ struct MotorProfile {
     PositionSource position_source;
 };
 
+struct TemperatureLimits {
+    // Zero keeps the corresponding policy disabled until a measured limit is
+    // commissioned for this joint.
+    float mcu_warning_c;
+    float mcu_fault_c;
+    float stator_warning_c;
+    float stator_fault_c;
+};
+
+struct SafetyProfile {
+    std::uint32_t command_timeout_ms;
+    TemperatureLimits temperature;
+};
+
+struct CommandTuning {
+    float default_position_kp;
+    float default_velocity_kp;
+    float default_torque_kp;
+    float acquire_threshold_rad;
+    float acquire_voltage;
+    float track_max_voltage;
+    float max_velocity_feedback_gain;
+    float register_position_kp;
+    float register_position_max_voltage;
+    std::int32_t register_position_deadband_ticks;
+};
+
 struct JointProfile {
     std::uint8_t index;
     Board board;
@@ -49,6 +76,26 @@ struct JointProfile {
     float position_upper_limit;
     std::int8_t position_direction;
     MotorProfile motor;
+    SafetyProfile safety;
+    CommandTuning command;
+};
+
+inline constexpr SafetyProfile kDefaultSafetyProfile{
+    .command_timeout_ms = 1000U,
+    .temperature = {0.0F, 0.0F, 0.0F, 0.0F},
+};
+
+inline constexpr CommandTuning kDefaultCommandTuning{
+    .default_position_kp = 0.5F,
+    .default_velocity_kp = 0.02F,
+    .default_torque_kp = 0.5F,
+    .acquire_threshold_rad = 0.5F,
+    .acquire_voltage = 0.6F,
+    .track_max_voltage = 11.5F,
+    .max_velocity_feedback_gain = 1.5F,
+    .register_position_kp = 0.002F,
+    .register_position_max_voltage = 1.2F,
+    .register_position_deadband_ticks = 8,
 };
 
 inline constexpr MotorProfile kG474MotorProfile{
@@ -79,14 +126,12 @@ inline constexpr MotorProfile kG431MotorProfile{
 // This table is the only CAN identity authority for all six joints.
 // Calibration offsets remain in the board-specific persistent record.
 inline constexpr JointProfile kJointProfiles[] = {
-    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile},
-    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile},
-    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile},
-    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile},
-    {5, Board::g431, 105, 1001, 1125, 1135, 36.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG431MotorProfile},
-    // J6 zero is the commissioned current mechanical position.  Keep a
-    // one-degree margin to the nominal half-turn stops on each side.
-    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0, 52076, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile},
+    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
+    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
+    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
+    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
+    {5, Board::g431, 105, 1001, 1125, 1135, 36.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
+    {6, Board::g431, 106, 1001, 1126, 1136, 36.0F,  1, -1,  1,    0, 52076, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning},
 };
 
 constexpr bool motor_profile_is_valid(const MotorProfile& profile) {
