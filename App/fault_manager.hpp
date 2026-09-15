@@ -25,6 +25,18 @@ struct FaultSnapshot {
     FaultLevel level{FaultLevel::nominal};
     StopReason stop_reason{StopReason::none};
     NetworkState network_state{NetworkState::starting};
+    float mcu_temperature_c{};
+    float stator_temperature_c{};
+};
+
+// Hardware-specific code samples these inputs; the common manager owns all
+// fault classification and publishes the resulting snapshot.
+struct FaultInputs {
+    CanFaultSnapshot can{};
+    bool calibration_valid{};
+    bool driver_fault{};
+    float mcu_temperature_c{};
+    float stator_temperature_c{};
 };
 
 // Application-level policy only. app.cpp owns the physical motor stop action.
@@ -33,18 +45,20 @@ public:
     void initialize() { initialized_ = true; }
 
     // Returns true once when a new motion-blocking condition is seen.
-    bool update(const CanFaultSnapshot& can, bool calibration_valid, bool driver_fault) {
+    bool update(const FaultInputs& inputs) {
         std::uint32_t active = fault_none;
-        if (driver_fault) active |= fault_driver;
-        if (can.bus_off) active |= fault_can_bus_off;
-        if (can.error_passive) active |= fault_can_passive;
-        if (!calibration_valid) active |= fault_calibration_invalid;
+        if (inputs.driver_fault) active |= fault_driver;
+        if (inputs.can.bus_off) active |= fault_can_bus_off;
+        if (inputs.can.error_passive) active |= fault_can_passive;
+        if (!inputs.calibration_valid) active |= fault_calibration_invalid;
 
         const std::uint32_t blocking = active & kBlockingFaults;
         const bool entered_blocking = initialized_ && blocking != 0U && previous_blocking_ == 0U;
         previous_blocking_ = blocking;
 
         snapshot_.active = active;
+        snapshot_.mcu_temperature_c = inputs.mcu_temperature_c;
+        snapshot_.stator_temperature_c = inputs.stator_temperature_c;
         if (blocking != 0U) {
             snapshot_.latched |= blocking;
             snapshot_.stop_reason = (blocking & fault_driver) != 0U
@@ -57,8 +71,8 @@ public:
         } else {
             snapshot_.level = FaultLevel::nominal;
         }
-        snapshot_.network_state = can.bus_off ? NetworkState::offline
-            : can.error_passive ? NetworkState::degraded : NetworkState::online;
+        snapshot_.network_state = inputs.can.bus_off ? NetworkState::offline
+            : inputs.can.error_passive ? NetworkState::degraded : NetworkState::online;
         return entered_blocking;
     }
 

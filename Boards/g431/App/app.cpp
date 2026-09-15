@@ -173,7 +173,15 @@ static void update_fault_manager() {
     // A disabled bridge is therefore an expected state, not a hardware fault.
     const bool driver_fault = motor->is_on() &&
         (HAL_GPIO_ReadPin(DRV_FAULT_GPIO_Port, DRV_FAULT_Pin) == GPIO_PIN_RESET);
-    if (fault_manager.update(can_fault_monitor.snapshot(), motor_calibration_valid, driver_fault)) {
+    const auto& inverter = static_cast<const VBInverter&>(motor->get_inverter());
+    const ruka3::FaultInputs inputs{
+        .can = can_fault_monitor.snapshot(),
+        .calibration_valid = motor_calibration_valid,
+        .driver_fault = driver_fault,
+        .mcu_temperature_c = inverter.get_mcu_temperature(),
+        .stator_temperature_c = inverter.get_stator_temperature(),
+    };
+    if (fault_manager.update(inputs)) {
         motor->set_foc_point(FOCTarget{0});
         motor->set_state(false);
         joint_controller.fault();
