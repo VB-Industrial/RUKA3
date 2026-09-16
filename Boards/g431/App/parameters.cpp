@@ -46,7 +46,7 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::CMD_COUNT: value.emplace<uint32_t>(command.accepted_count); return true;
         case ParameterId::CMD_AGE_MS: value.emplace<uint32_t>(command.age_ms); return true;
         case ParameterId::CMD_TIMEOUT: value.emplace<bool>(command.timed_out); return true;
-        case ParameterId::ZERO_SET: value.emplace<bool>(false); return true;
+        case ParameterId::ZERO_SET: value.emplace<int32_t>(0); return true;
         case ParameterId::SET_LIMIT: value.emplace<uint32_t>(mechanical.limit_stage); return true;
         case ParameterId::MOVE: value.emplace<float>(service.mode == ruka3::ServiceMotionMode::voltage ? service.target : 0.0F); return true;
         case ParameterId::POS_SET: value.emplace<float>(service.mode == ruka3::ServiceMotionMode::position ? service.target : output.fused_angle); return true;
@@ -92,9 +92,6 @@ ParameterWriteResult write_runtime_parameter(ParameterId id, const ParameterValu
     }
     if (id == ParameterId::FAULT_ACK) {
         return std::get<bool>(value) && acknowledge_faults() ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
-    }
-    if (id == ParameterId::ZERO_SET) {
-        return std::get<bool>(value) && service_set_zero() ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
     }
     if (id == ParameterId::SET_LIMIT) {
         return service_set_limit(std::get<uint32_t>(value)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;

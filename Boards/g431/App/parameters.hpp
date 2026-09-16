@@ -49,7 +49,9 @@ inline constexpr std::array<ParameterDefinition, 37> PARAMETER_CATALOG{{
     {ParameterId::GET_ANGLE,       "get_angle",     ParameterType::REAL32_ARRAY, false, false},
     {ParameterId::CALIB_VALID,     "calib_valid",   ParameterType::BIT,       false, false},
     {ParameterId::CALIB_INVERTED,  "calib_inverted",ParameterType::BIT,       false, false},
-    {ParameterId::ZERO_SET,        "zero_set",      ParameterType::BIT,       true,  false},
+    // RUKA2-compatible trigger: an empty register read calibrates zero and
+    // returns INTEGER32 0/1.  It deliberately has no writable value.
+    {ParameterId::ZERO_SET,        "zero_set",      ParameterType::INTEGER32, false, false},
     {ParameterId::SET_LIMIT,       "set_limit",     ParameterType::NATURAL32, true,  false},
     {ParameterId::MOVE,            "move",          ParameterType::REAL32,    true,  false},
     {ParameterId::POS_SET,         "pos_set",       ParameterType::REAL32,    true,  false},

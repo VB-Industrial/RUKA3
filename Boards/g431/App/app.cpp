@@ -178,7 +178,8 @@ static bool apply_runtime_limits() {
 }
 
 bool service_set_zero() {
-    if (!motor || get_fault_snapshot().level == ruka3::FaultLevel::fault) return false;
+    if (!motor || !output_observer.snapshot().initialized ||
+        get_fault_snapshot().level == ruka3::FaultLevel::fault) return false;
     service_cancel();
     motor->set_foc_point(FOCTarget{0});
     set_motor_enabled(false);
@@ -611,6 +612,13 @@ static void handle_parameter_register(
     const auto& definition = PARAMETER_CATALOG[index];
     response.persistent = definition.is_persistent;
     response._mutable = definition.is_mutable;
+
+    // Keep RUKA2's service convention: a read of zero_set is an explicit
+    // calibration trigger, with its result carried by the same response.
+    if (definition.id == ParameterId::ZERO_SET && v_in._tag_ == REGISTER_EMPTY_TAG) {
+        fill_register_integer32(v_out, service_set_zero() ? 1 : 0);
+        return;
+    }
 
     if (definition.is_mutable && v_in._tag_ != REGISTER_EMPTY_TAG) {
         ParameterValue requested{};
