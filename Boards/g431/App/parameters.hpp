@@ -26,7 +26,7 @@ struct ParameterDefinition {
     bool is_persistent;
 };
 
-using AngleDiagnostics = std::array<float, 25>;
+using AngleDiagnostics = std::array<float, 26>;
 using ParameterValue = std::variant<uint32_t, int32_t, float, bool, std::string_view, AngleDiagnostics>;
 enum class ParameterWriteResult : uint8_t { OK, READ_ONLY, INVALID, UNAVAILABLE };
 
@@ -44,7 +44,7 @@ inline constexpr std::array<ParameterDefinition, 37> PARAMETER_CATALOG{{
     {ParameterId::IS_FAULT,        "is_fault",      ParameterType::BIT,       false, false},
     // get_angle: shaft/rotor ticks, motor angle/velocity, electric angle,
     // output angle/velocity/residual, fused angle/velocity/offset/error,
-    // motor calibration offset, EEPROM zero, gear/corridor, runtime limits,
+    // motor calibration offset, EEPROM zero/motor offset, gear/corridor, runtime limits,
     // raw endpoints, limit stage/direction, service mode/target/error.
     {ParameterId::GET_ANGLE,       "get_angle",     ParameterType::REAL32_ARRAY, false, false},
     {ParameterId::CALIB_VALID,     "calib_valid",   ParameterType::BIT,       false, false},

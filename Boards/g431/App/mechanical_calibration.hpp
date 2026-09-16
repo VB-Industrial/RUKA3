@@ -11,6 +11,7 @@ namespace ruka3 {
 
 struct MechanicalCalibrationSnapshot {
     std::uint16_t encoder_zero{};
+    float motor_angle_offset{};
     float lower_limit{};
     float upper_limit{};
     std::uint16_t limit_a_raw{};
@@ -26,13 +27,14 @@ public:
     MechanicalCalibration(EEPROM& eeprom, std::uint32_t encoder_cpr, std::int8_t encoder_sign)
         : eeprom_(eeprom), cpr_(encoder_cpr), sign_(encoder_sign) {}
 
-    void load(std::uint16_t default_zero, float default_lower, float default_upper) {
+    void load(std::uint16_t default_zero, float default_lower, float default_upper, float default_motor_offset) {
         Record first{};
         Record second{};
         const bool first_valid = eeprom_.read(&first, MECHANICAL_CALIBRATION_SLOT_A) == HAL_OK && valid(first);
         const bool second_valid = eeprom_.read(&second, MECHANICAL_CALIBRATION_SLOT_B) == HAL_OK && valid(second);
         if (!first_valid && !second_valid) {
             snapshot_.encoder_zero = default_zero;
+            snapshot_.motor_angle_offset = default_motor_offset;
             snapshot_.lower_limit = default_lower;
             snapshot_.upper_limit = default_upper;
             snapshot_.limits_valid = default_lower < default_upper;
@@ -42,6 +44,7 @@ public:
         sequence_ = record.sequence;
         active_slot_ = (&record == &second) ? MECHANICAL_CALIBRATION_SLOT_B : MECHANICAL_CALIBRATION_SLOT_A;
         snapshot_.encoder_zero = record.encoder_zero;
+        std::memcpy(&snapshot_.motor_angle_offset, &record.motor_angle_offset_bits, sizeof(snapshot_.motor_angle_offset));
         snapshot_.limit_a_raw = record.limit_a_raw;
         snapshot_.limit_b_raw = record.limit_b_raw;
         has_raw_limits_ = (record.flags & kLimitsValid) != 0U && record.limit_a_raw != record.limit_b_raw;
@@ -56,8 +59,9 @@ public:
         }
     }
 
-    bool set_zero(std::uint16_t raw_ticks) {
+    bool set_zero(std::uint16_t raw_ticks, float motor_angle_offset) {
         snapshot_.encoder_zero = raw_ticks;
+        snapshot_.motor_angle_offset = motor_angle_offset;
         if (has_raw_limits_) refresh_limits();
         return save();
     }
@@ -103,7 +107,7 @@ public:
 
 private:
     static constexpr std::uint32_t kMagic = 0x4D434A52U;  // RJCM
-    static constexpr std::uint16_t kVersion = 1U;
+    static constexpr std::uint16_t kVersion = 2U;
     static constexpr std::uint16_t kLimitsValid = 1U;
     static constexpr std::uint16_t kPositiveDirection = 2U;
     struct __attribute__((packed)) Record {
@@ -115,7 +119,8 @@ private:
         std::uint16_t flags{};
         std::uint16_t limit_a_raw{};
         std::uint16_t limit_b_raw{};
-        std::uint8_t reserved[8]{};
+        std::uint32_t motor_angle_offset_bits{};
+        std::uint8_t reserved[4]{};
         std::uint32_t crc{};
     };
     static_assert(sizeof(Record) == MECHANICAL_CALIBRATION_SLOT_SIZE);
@@ -133,7 +138,7 @@ private:
         return static_cast<std::int32_t>(candidate - current) > 0;
     }
     static bool valid(const Record& record) {
-        return record.magic == kMagic && record.version == kVersion && record.size == sizeof(Record) &&
+        return record.magic == kMagic && (record.version == 1U || record.version == kVersion) && record.size == sizeof(Record) &&
                record.crc == crc32(reinterpret_cast<const std::uint8_t*>(&record), offsetof(Record, crc));
     }
     std::uint32_t distance(std::uint16_t from, std::uint16_t to, std::int8_t direction) const {
@@ -163,6 +168,7 @@ private:
         if (snapshot_.limit_direction > 0) record.flags |= kPositiveDirection;
         record.limit_a_raw = snapshot_.limit_a_raw;
         record.limit_b_raw = snapshot_.limit_b_raw;
+        std::memcpy(&record.motor_angle_offset_bits, &snapshot_.motor_angle_offset, sizeof(record.motor_angle_offset_bits));
         record.crc = crc32(reinterpret_cast<const std::uint8_t*>(&record), offsetof(Record, crc));
         const std::uint16_t destination = active_slot_ == MECHANICAL_CALIBRATION_SLOT_A
             ? MECHANICAL_CALIBRATION_SLOT_B : MECHANICAL_CALIBRATION_SLOT_A;

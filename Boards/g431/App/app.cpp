@@ -183,7 +183,13 @@ bool service_set_zero() {
     service_cancel();
     motor->set_foc_point(FOCTarget{0});
     set_motor_enabled(false);
-    if (!mechanical_calibration.set_zero(static_cast<uint16_t>(motor->get_shaft_encoder_value()))) return false;
+    // Keep VBDrive's output-angle coordinate in the same geometric frame as
+    // the external encoder.  The FOC calibration itself is untouched.
+    auto config = motor->get_runtime_config();
+    config.user_angle_offset -= motor->get_angle();
+    if (!motor->set_runtime_config(config)) return false;
+    if (!mechanical_calibration.set_zero(
+            static_cast<uint16_t>(motor->get_shaft_encoder_value()), config.user_angle_offset)) return false;
     output_observer.set_encoder_zero(mechanical_calibration.snapshot().encoder_zero);
     output_observer.update(millis_32(), motor->get_shaft_encoder_value(), motor->get_angle());
     return apply_runtime_limits();
@@ -341,7 +347,7 @@ void create_motor() {
                 ? mechanical_calibration.snapshot().lower_limit : NAN,
             .user_position_upper_limit = mechanical_calibration.snapshot().limits_valid
                 ? mechanical_calibration.snapshot().upper_limit : NAN,
-            .user_angle_offset = profile.position_offset,
+            .user_angle_offset = mechanical_calibration.snapshot().motor_angle_offset,
             .user_angle_direction = profile.position_direction
         },
         // Built-in constant parameters
@@ -420,7 +426,8 @@ void app() {
     start_timers();
     eeprom.wait_until_available();
     constexpr auto& profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
-    mechanical_calibration.load(profile.output_encoder_zero, profile.position_lower_limit, profile.position_upper_limit);
+    mechanical_calibration.load(profile.output_encoder_zero, profile.position_lower_limit,
+                                profile.position_upper_limit, profile.position_offset);
     output_observer.set_encoder_zero(mechanical_calibration.snapshot().encoder_zero);
     // Bring up the fixed FDCAN transport before the motor stack. This is the
     // same ordering as the communication bootstrap, so motor initialization
