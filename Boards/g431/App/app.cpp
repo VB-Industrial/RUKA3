@@ -526,6 +526,8 @@ static void handle_parameter_register(
             case ParameterType::REAL32:
                 parsed = parse_register_real32(v_in, requested.emplace<float>());
                 break;
+            case ParameterType::REAL32_ARRAY:
+                break;
             case ParameterType::NATURAL32:
                 parsed = parse_register_natural32(v_in, requested.emplace<uint32_t>());
                 if (!parsed) {
@@ -571,6 +573,13 @@ static void handle_parameter_register(
         case ParameterType::REAL32:
             fill_register_real32(v_out, std::get<float>(current));
             break;
+        case ParameterType::REAL32_ARRAY: {
+            const auto& values = std::get<AngleDiagnostics>(current);
+            v_out._tag_ = REGISTER_REAL32_TAG;
+            for (size_t i = 0; i < values.size(); ++i) v_out.real32.value.elements[i] = values[i];
+            v_out.real32.value.count = values.size();
+            break;
+        }
         case ParameterType::NATURAL32:
             fill_register_natural32(v_out, std::get<uint32_t>(current));
             break;

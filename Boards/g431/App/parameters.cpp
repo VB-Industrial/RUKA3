@@ -32,13 +32,6 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::NET_STATE: value.emplace<uint32_t>(static_cast<uint32_t>(faults.network_state)); return true;
         case ParameterId::FAULT_ACK: value.emplace<bool>(false); return true;
         case ParameterId::JOINT_STATE: value.emplace<uint32_t>(get_joint_state()); return true;
-        case ParameterId::OUT_ANGLE: value.emplace<float>(output.encoder_angle); return true;
-        case ParameterId::OUT_VELOCITY: value.emplace<float>(output.output_velocity); return true;
-        case ParameterId::OUT_RESIDUAL: value.emplace<float>(output.motor_residual); return true;
-        case ParameterId::FUSED_ANGLE: value.emplace<float>(output.fused_angle); return true;
-        case ParameterId::FUSED_VELOCITY: value.emplace<float>(output.fused_velocity); return true;
-        case ParameterId::FUSION_OFFSET: value.emplace<float>(output.fusion_offset); return true;
-        case ParameterId::ENCODER_ERROR: value.emplace<float>(output.encoder_error); return true;
         case ParameterId::CAN_ERR_TOTAL: value.emplace<uint32_t>(can_faults.session_error_count); return true;
         case ParameterId::CAN_RX_ERR: value.emplace<uint32_t>(can_faults.rx_error_count); return true;
         case ParameterId::CAN_TX_ERR: value.emplace<uint32_t>(can_faults.tx_error_count); return true;
@@ -62,13 +55,22 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::BUS_CURRENT: value.emplace<float>(motor->get_working_current()); return true;
         case ParameterId::TEMP_MCU: value.emplace<float>(inverter.get_mcu_temperature() + 273.15f); return true;
         case ParameterId::TEMP_STATOR: value.emplace<float>(inverter.get_stator_temperature() + 273.15f); return true;
-        case ParameterId::ENCODER_SHAFT: value.emplace<uint32_t>(motor->get_shaft_encoder_value()); return true;
-        case ParameterId::ENCODER_ROTOR: value.emplace<uint32_t>(motor->get_rotor_encoder_value()); return true;
-        case ParameterId::MOTOR_ANGLE: value.emplace<float>(motor->get_angle()); return true;
+        case ParameterId::GET_ANGLE: {
+            const auto& profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
+            value.emplace<AngleDiagnostics>(AngleDiagnostics{
+                static_cast<float>(motor->get_shaft_encoder_value()),
+                static_cast<float>(motor->get_rotor_encoder_value()),
+                motor->get_angle(), motor->get_velocity(), motor->get_electric_angle(),
+                output.encoder_angle, output.output_velocity, output.motor_residual,
+                output.fused_angle, output.fused_velocity, output.fusion_offset,
+                output.encoder_error, static_cast<float>(get_motor_calibration_offset()),
+                static_cast<float>(profile.output_encoder_zero), profile.gear_ratio,
+                static_cast<float>(profile.observer.fusion_encoder_corridor_ticks),
+            });
+            return true;
+        }
         case ParameterId::CALIB_VALID: value.emplace<bool>(is_motor_calibrated()); return true;
-        case ParameterId::CALIB_OFFSET: value.emplace<int32_t>(get_motor_calibration_offset()); return true;
         case ParameterId::CALIB_INVERTED: value.emplace<bool>(is_motor_encoder_inverted()); return true;
-        case ParameterId::ELECTRIC_ANGLE: value.emplace<float>(get_motor_electric_angle()); return true;
         default: return false;
     }
 }

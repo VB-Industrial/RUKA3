@@ -5,20 +5,17 @@
 #include <string_view>
 #include <variant>
 
-enum class ParameterType : uint8_t { REAL32, NATURAL32, INTEGER32, BIT, STRING };
+enum class ParameterType : uint8_t { REAL32, REAL32_ARRAY, NATURAL32, INTEGER32, BIT, STRING };
 
 enum class ParameterId : uint8_t {
     NODE_ID, IS_ON, BOOTLOADER, CMD_ERRORS, MODEL, REVISION,
     BUS_VOLTAGE, BUS_CURRENT, TEMP_MCU, TEMP_STATOR, IS_FAULT,
-    ENCODER_SHAFT, ENCODER_ROTOR, MOTOR_ANGLE, CALIB_VALID, CALIB_OFFSET, CALIB_INVERTED,
-    ELECTRIC_ANGLE,
+    GET_ANGLE, CALIB_VALID, CALIB_INVERTED,
     CAN_ERR_TOTAL, CAN_RX_ERR, CAN_TX_ERR, CAN_ERR_LOG, CAN_ARB_LEC,
     CAN_DATA_LEC, CAN_WARNING, CAN_PASSIVE, CAN_BUS_OFF,
     CMD_COUNT, CMD_AGE_MS, CMD_TIMEOUT,
     FAULT_ACTIVE, FAULT_LATCHED, FAULT_LEVEL, STOP_REASON, NET_STATE, FAULT_ACK,
     JOINT_STATE,
-    OUT_ANGLE, OUT_VELOCITY, OUT_RESIDUAL,
-    FUSED_ANGLE, FUSED_VELOCITY, FUSION_OFFSET, ENCODER_ERROR,
 };
 
 struct ParameterDefinition {
@@ -29,10 +26,11 @@ struct ParameterDefinition {
     bool is_persistent;
 };
 
-using ParameterValue = std::variant<uint32_t, int32_t, float, bool, std::string_view>;
+using AngleDiagnostics = std::array<float, 16>;
+using ParameterValue = std::variant<uint32_t, int32_t, float, bool, std::string_view, AngleDiagnostics>;
 enum class ParameterWriteResult : uint8_t { OK, READ_ONLY, INVALID, UNAVAILABLE };
 
-inline constexpr std::array<ParameterDefinition, 44> PARAMETER_CATALOG{{
+inline constexpr std::array<ParameterDefinition, 33> PARAMETER_CATALOG{{
     {ParameterId::NODE_ID,         "node_id",       ParameterType::NATURAL32, false, false},
     {ParameterId::IS_ON,           "is_on",         ParameterType::BIT,       true,  false},
     {ParameterId::BOOTLOADER,      "bootloader",    ParameterType::BIT,       true,  false},
@@ -44,13 +42,13 @@ inline constexpr std::array<ParameterDefinition, 44> PARAMETER_CATALOG{{
     {ParameterId::TEMP_MCU,        "temp_mcu",      ParameterType::REAL32,    false, false},
     {ParameterId::TEMP_STATOR,     "temp_stator",   ParameterType::REAL32,    false, false},
     {ParameterId::IS_FAULT,        "is_fault",      ParameterType::BIT,       false, false},
-    {ParameterId::ENCODER_SHAFT,   "encoder_shaft", ParameterType::NATURAL32, false, false},
-    {ParameterId::ENCODER_ROTOR,   "encoder_rotor", ParameterType::NATURAL32, false, false},
-    {ParameterId::MOTOR_ANGLE,     "motor_angle",   ParameterType::REAL32,    false, false},
+    // get_angle: shaft ticks, rotor ticks, motor angle, motor velocity,
+    // electric angle, output angle/velocity/residual, fused angle/velocity,
+    // fusion offset, encoder error, motor calibration offset, output zero,
+    // gear ratio, fusion corridor ticks.
+    {ParameterId::GET_ANGLE,       "get_angle",     ParameterType::REAL32_ARRAY, false, false},
     {ParameterId::CALIB_VALID,     "calib_valid",   ParameterType::BIT,       false, false},
-    {ParameterId::CALIB_OFFSET,    "calib_offset",  ParameterType::INTEGER32, false, false},
     {ParameterId::CALIB_INVERTED,  "calib_inverted",ParameterType::BIT,       false, false},
-    {ParameterId::ELECTRIC_ANGLE,  "electric_angle",ParameterType::REAL32,    false, false},
     {ParameterId::CAN_ERR_TOTAL,   "can_err_total", ParameterType::NATURAL32, false, false},
     {ParameterId::CAN_RX_ERR,      "can_rx_err",    ParameterType::NATURAL32, false, false},
     {ParameterId::CAN_TX_ERR,      "can_tx_err",    ParameterType::NATURAL32, false, false},
@@ -70,13 +68,6 @@ inline constexpr std::array<ParameterDefinition, 44> PARAMETER_CATALOG{{
     {ParameterId::NET_STATE,       "net_state",     ParameterType::NATURAL32, false, false},
     {ParameterId::FAULT_ACK,       "fault_ack",     ParameterType::BIT,       true,  false},
     {ParameterId::JOINT_STATE,     "joint_state",   ParameterType::NATURAL32, false, false},
-    {ParameterId::OUT_ANGLE,       "out_angle",     ParameterType::REAL32,    false, false},
-    {ParameterId::OUT_VELOCITY,    "out_velocity",  ParameterType::REAL32,    false, false},
-    {ParameterId::OUT_RESIDUAL,    "out_residual",  ParameterType::REAL32,    false, false},
-    {ParameterId::FUSED_ANGLE,     "fused_angle",   ParameterType::REAL32,    false, false},
-    {ParameterId::FUSED_VELOCITY,  "fused_velocity",ParameterType::REAL32,    false, false},
-    {ParameterId::FUSION_OFFSET,   "fusion_offset", ParameterType::REAL32,    false, false},
-    {ParameterId::ENCODER_ERROR,   "encoder_error", ParameterType::REAL32,    false, false},
 }};
 
 consteval bool parameter_catalog_is_valid() {
