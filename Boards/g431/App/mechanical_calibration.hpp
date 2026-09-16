@@ -44,10 +44,11 @@ public:
         snapshot_.encoder_zero = record.encoder_zero;
         snapshot_.limit_a_raw = record.limit_a_raw;
         snapshot_.limit_b_raw = record.limit_b_raw;
-        snapshot_.limits_valid = (record.flags & kLimitsValid) != 0U;
+        has_raw_limits_ = (record.flags & kLimitsValid) != 0U && record.limit_a_raw != record.limit_b_raw;
+        snapshot_.limits_valid = has_raw_limits_;
         snapshot_.limit_direction = (record.flags & kPositiveDirection) != 0U ? 1 : -1;
         snapshot_.loaded_from_eeprom = true;
-        if (snapshot_.limits_valid) refresh_limits();
+        if (has_raw_limits_) refresh_limits();
         else {
             snapshot_.lower_limit = default_lower;
             snapshot_.upper_limit = default_upper;
@@ -56,7 +57,7 @@ public:
 
     bool set_zero(std::uint16_t raw_ticks) {
         snapshot_.encoder_zero = raw_ticks;
-        if (snapshot_.limits_valid) refresh_limits();
+        if (has_raw_limits_) refresh_limits();
         return save();
     }
 
@@ -90,6 +91,7 @@ public:
         }
         snapshot_.limit_a_raw = first_limit_;
         snapshot_.limit_b_raw = raw_ticks;
+        has_raw_limits_ = true;
         snapshot_.limits_valid = true;
         refresh_limits();
         snapshot_.limit_stage = 0U;
@@ -156,7 +158,7 @@ private:
         record.size = sizeof(record);
         record.sequence = ++sequence_;
         record.encoder_zero = snapshot_.encoder_zero;
-        record.flags = snapshot_.limits_valid ? kLimitsValid : 0U;
+        record.flags = has_raw_limits_ ? kLimitsValid : 0U;
         if (snapshot_.limit_direction > 0) record.flags |= kPositiveDirection;
         record.limit_a_raw = snapshot_.limit_a_raw;
         record.limit_b_raw = snapshot_.limit_b_raw;
@@ -178,6 +180,7 @@ private:
     std::uint16_t active_slot_{MECHANICAL_CALIBRATION_SLOT_B};
     std::uint16_t first_limit_{};
     std::uint16_t middle_point_{};
+    bool has_raw_limits_{};
 };
 
 }  // namespace ruka3
