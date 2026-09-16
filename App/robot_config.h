@@ -104,6 +104,20 @@ inline constexpr CommandTuning kDefaultCommandTuning{
     .register_position_max_voltage = 1.2F,
     .register_position_deadband_ticks = 8,
 };
+// J5/J6 have been validated at this position stiffness.  A velocity term made
+// the compact joints vibrate, so service position hold keeps it at zero.
+inline constexpr CommandTuning kG431CommandTuning{
+    .default_position_kp = 5.0F,
+    .default_velocity_kp = 0.0F,
+    .default_torque_kp = 0.5F,
+    .acquire_threshold_rad = 0.5F,
+    .acquire_voltage = 0.6F,
+    .track_max_voltage = 11.5F,
+    .max_velocity_feedback_gain = 1.5F,
+    .register_position_kp = 0.002F,
+    .register_position_max_voltage = 1.2F,
+    .register_position_deadband_ticks = 8,
+};
 inline constexpr ObserverProfile kDefaultObserverProfile{65536U, 0.1F, 2U};
 
 inline constexpr MotorProfile kG474MotorProfile{
@@ -138,8 +152,8 @@ inline constexpr JointProfile kJointProfiles[] = {
     {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
     {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
     {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
-    {5, Board::g431, 105, 1001, 1125, 1135, 10.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
-    {6, Board::g431, 106, 1001, 1126, 1136, 10.0F,  1, -1,  1,    0, 52076, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
+    {5, Board::g431, 105, 1001, 1125, 1135, 10.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kDefaultObserverProfile},
+    {6, Board::g431, 106, 1001, 1126, 1136, 10.0F,  1, -1,  1,    0, 52076, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kDefaultObserverProfile},
 };
 
 constexpr bool motor_profile_is_valid(const MotorProfile& profile) {
