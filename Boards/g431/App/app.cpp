@@ -537,6 +537,17 @@ static bool is_voltage_target_valid(float voltage) {
     return std::isfinite(voltage) && std::fabs(voltage) <= motor_profile.max_voltage;
 }
 
+static bool is_output_position_target_valid(float target) {
+    const auto& output = output_observer.snapshot();
+    const auto& limits = mechanical_calibration.snapshot();
+    return output.initialized && std::isfinite(target) &&
+        (!limits.limits_valid || (target >= limits.lower_limit && target <= limits.upper_limit));
+}
+
+static float output_target_to_motor_target(float output_target) {
+    return motor->get_angle() + (output_target - output_observer.snapshot().fused_angle);
+}
+
 static void reboot_to_bootloader_if_requested() {
     if (!bootloader_reboot_pending) {
         return;
@@ -556,8 +567,9 @@ void in_loop_reporting(millis current_t) {
 
         state_msg.timestamp.microsecond = system_time();
 
-        state_msg.angle.radian = motor->get_angle();
-        state_msg.velocity.radian_per_second = motor->get_velocity();
+        const auto& output = output_observer.snapshot();
+        state_msg.angle.radian = output.initialized ? output.fused_angle : motor->get_angle();
+        state_msg.velocity.radian_per_second = output.initialized ? output.fused_velocity : motor->get_velocity();
         state_msg._torque.newton_meter = motor->get_torque();
 
         state_msg.current.ampere = motor->get_working_current();
@@ -583,9 +595,13 @@ public:
             record_invalid_command();
             return;
         }
+        if (!is_output_position_target_valid(msg.pos.radian)) {
+            record_invalid_command();
+            return;
+        }
         bool is_valid = motor->set_foc_point(FOCTarget {
             .torque = msg._torq.newton_meter,
-            .angle = msg.pos.radian,
+            .angle = output_target_to_motor_target(msg.pos.radian),
             .velocity = msg.vel.radian_per_second,
             .angle_kp = msg.pos_gain.value,
             .velocity_kp = msg.vel_gain.value
@@ -620,7 +636,8 @@ public:
                 is_valid = motor->set_torque_point(msg.set_point_value);
                 break;
             case voltbro_foc_specific_control_1_0_POSITION:
-                is_valid = motor->set_angle_point(msg.set_point_value);
+                is_valid = is_output_position_target_valid(msg.set_point_value) &&
+                    motor->set_angle_point(output_target_to_motor_target(msg.set_point_value));
                 break;
             case voltbro_foc_specific_control_1_0_VOLTAGE:
                 is_valid = is_voltage_target_valid(msg.set_point_value) &&
