@@ -35,6 +35,10 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::OUT_ANGLE: value.emplace<float>(output.encoder_angle); return true;
         case ParameterId::OUT_VELOCITY: value.emplace<float>(output.output_velocity); return true;
         case ParameterId::OUT_RESIDUAL: value.emplace<float>(output.motor_residual); return true;
+        case ParameterId::FUSED_ANGLE: value.emplace<float>(output.fused_angle); return true;
+        case ParameterId::FUSED_VELOCITY: value.emplace<float>(output.fused_velocity); return true;
+        case ParameterId::FUSION_OFFSET: value.emplace<float>(output.fusion_offset); return true;
+        case ParameterId::ENCODER_ERROR: value.emplace<float>(output.encoder_error); return true;
         case ParameterId::CAN_ERR_TOTAL: value.emplace<uint32_t>(can_faults.session_error_count); return true;
         case ParameterId::CAN_RX_ERR: value.emplace<uint32_t>(can_faults.rx_error_count); return true;
         case ParameterId::CAN_TX_ERR: value.emplace<uint32_t>(can_faults.tx_error_count); return true;
@@ -60,6 +64,7 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::TEMP_STATOR: value.emplace<float>(inverter.get_stator_temperature() + 273.15f); return true;
         case ParameterId::ENCODER_SHAFT: value.emplace<uint32_t>(motor->get_shaft_encoder_value()); return true;
         case ParameterId::ENCODER_ROTOR: value.emplace<uint32_t>(motor->get_rotor_encoder_value()); return true;
+        case ParameterId::MOTOR_ANGLE: value.emplace<float>(motor->get_angle()); return true;
         case ParameterId::CALIB_VALID: value.emplace<bool>(is_motor_calibrated()); return true;
         case ParameterId::CALIB_OFFSET: value.emplace<int32_t>(get_motor_calibration_offset()); return true;
         case ParameterId::CALIB_INVERTED: value.emplace<bool>(is_motor_encoder_inverted()); return true;

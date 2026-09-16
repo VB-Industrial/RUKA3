@@ -59,6 +59,7 @@ struct CommandTuning {
 struct ObserverProfile {
     std::uint32_t output_encoder_cpr;
     float output_velocity_lpf;
+    std::uint8_t fusion_encoder_corridor_ticks;
 };
 
 struct JointProfile {
@@ -103,7 +104,7 @@ inline constexpr CommandTuning kDefaultCommandTuning{
     .register_position_max_voltage = 1.2F,
     .register_position_deadband_ticks = 8,
 };
-inline constexpr ObserverProfile kDefaultObserverProfile{65536U, 0.1F};
+inline constexpr ObserverProfile kDefaultObserverProfile{65536U, 0.1F, 2U};
 
 inline constexpr MotorProfile kG474MotorProfile{
     .control_period_s = 0.00005F, .torque_const = 0.011F,

@@ -10,7 +10,7 @@ enum class ParameterType : uint8_t { REAL32, NATURAL32, INTEGER32, BIT, STRING }
 enum class ParameterId : uint8_t {
     NODE_ID, IS_ON, BOOTLOADER, CMD_ERRORS, MODEL, REVISION,
     BUS_VOLTAGE, BUS_CURRENT, TEMP_MCU, TEMP_STATOR, IS_FAULT,
-    ENCODER_SHAFT, ENCODER_ROTOR, CALIB_VALID, CALIB_OFFSET, CALIB_INVERTED,
+    ENCODER_SHAFT, ENCODER_ROTOR, MOTOR_ANGLE, CALIB_VALID, CALIB_OFFSET, CALIB_INVERTED,
     ELECTRIC_ANGLE,
     CAN_ERR_TOTAL, CAN_RX_ERR, CAN_TX_ERR, CAN_ERR_LOG, CAN_ARB_LEC,
     CAN_DATA_LEC, CAN_WARNING, CAN_PASSIVE, CAN_BUS_OFF,
@@ -18,6 +18,7 @@ enum class ParameterId : uint8_t {
     FAULT_ACTIVE, FAULT_LATCHED, FAULT_LEVEL, STOP_REASON, NET_STATE, FAULT_ACK,
     JOINT_STATE,
     OUT_ANGLE, OUT_VELOCITY, OUT_RESIDUAL,
+    FUSED_ANGLE, FUSED_VELOCITY, FUSION_OFFSET, ENCODER_ERROR,
 };
 
 struct ParameterDefinition {
@@ -31,7 +32,7 @@ struct ParameterDefinition {
 using ParameterValue = std::variant<uint32_t, int32_t, float, bool, std::string_view>;
 enum class ParameterWriteResult : uint8_t { OK, READ_ONLY, INVALID, UNAVAILABLE };
 
-inline constexpr std::array<ParameterDefinition, 39> PARAMETER_CATALOG{{
+inline constexpr std::array<ParameterDefinition, 44> PARAMETER_CATALOG{{
     {ParameterId::NODE_ID,         "node_id",       ParameterType::NATURAL32, false, false},
     {ParameterId::IS_ON,           "is_on",         ParameterType::BIT,       true,  false},
     {ParameterId::BOOTLOADER,      "bootloader",    ParameterType::BIT,       true,  false},
@@ -45,6 +46,7 @@ inline constexpr std::array<ParameterDefinition, 39> PARAMETER_CATALOG{{
     {ParameterId::IS_FAULT,        "is_fault",      ParameterType::BIT,       false, false},
     {ParameterId::ENCODER_SHAFT,   "encoder_shaft", ParameterType::NATURAL32, false, false},
     {ParameterId::ENCODER_ROTOR,   "encoder_rotor", ParameterType::NATURAL32, false, false},
+    {ParameterId::MOTOR_ANGLE,     "motor_angle",   ParameterType::REAL32,    false, false},
     {ParameterId::CALIB_VALID,     "calib_valid",   ParameterType::BIT,       false, false},
     {ParameterId::CALIB_OFFSET,    "calib_offset",  ParameterType::INTEGER32, false, false},
     {ParameterId::CALIB_INVERTED,  "calib_inverted",ParameterType::BIT,       false, false},
@@ -71,6 +73,10 @@ inline constexpr std::array<ParameterDefinition, 39> PARAMETER_CATALOG{{
     {ParameterId::OUT_ANGLE,       "out_angle",     ParameterType::REAL32,    false, false},
     {ParameterId::OUT_VELOCITY,    "out_velocity",  ParameterType::REAL32,    false, false},
     {ParameterId::OUT_RESIDUAL,    "out_residual",  ParameterType::REAL32,    false, false},
+    {ParameterId::FUSED_ANGLE,     "fused_angle",   ParameterType::REAL32,    false, false},
+    {ParameterId::FUSED_VELOCITY,  "fused_velocity",ParameterType::REAL32,    false, false},
+    {ParameterId::FUSION_OFFSET,   "fusion_offset", ParameterType::REAL32,    false, false},
+    {ParameterId::ENCODER_ERROR,   "encoder_error", ParameterType::REAL32,    false, false},
 }};
 
 consteval bool parameter_catalog_is_valid() {

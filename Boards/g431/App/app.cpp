@@ -135,6 +135,7 @@ static ruka3::OutputStateObserver output_observer({
     ruka3::joint_profile(RUKA3_JOINT_INDEX).output_encoder_zero,
     ruka3::joint_profile(RUKA3_JOINT_INDEX).output_encoder_sign,
     ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.output_velocity_lpf,
+    ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.fusion_encoder_corridor_ticks,
 });
 VBDrive* get_motor() {
     return motor;
