@@ -46,7 +46,8 @@ public:
         snapshot_.limit_b_raw = record.limit_b_raw;
         has_raw_limits_ = (record.flags & kLimitsValid) != 0U && record.limit_a_raw != record.limit_b_raw;
         snapshot_.limits_valid = has_raw_limits_;
-        snapshot_.limit_direction = (record.flags & kPositiveDirection) != 0U ? 1 : -1;
+        snapshot_.limit_direction = has_raw_limits_
+            ? ((record.flags & kPositiveDirection) != 0U ? 1 : -1) : 0;
         snapshot_.loaded_from_eeprom = true;
         if (has_raw_limits_) refresh_limits();
         else {
