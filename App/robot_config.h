@@ -54,6 +54,8 @@ struct CommandTuning {
     float register_position_kp;
     float register_position_max_voltage;
     std::int32_t register_position_deadband_ticks;
+    float service_position_velocity_rad_s;
+    float service_position_acceleration_rad_s2;
 };
 
 struct ObserverProfile {
@@ -103,6 +105,8 @@ inline constexpr CommandTuning kDefaultCommandTuning{
     .register_position_kp = 0.002F,
     .register_position_max_voltage = 1.2F,
     .register_position_deadband_ticks = 8,
+    .service_position_velocity_rad_s = 0.5F,
+    .service_position_acceleration_rad_s2 = 1.0F,
 };
 // J5/J6 have been validated at this position stiffness.  A velocity term made
 // the compact joints vibrate, so service position hold keeps it at zero.
@@ -117,6 +121,8 @@ inline constexpr CommandTuning kG431CommandTuning{
     .register_position_kp = 0.002F,
     .register_position_max_voltage = 1.2F,
     .register_position_deadband_ticks = 8,
+    .service_position_velocity_rad_s = 0.5F,
+    .service_position_acceleration_rad_s2 = 1.0F,
 };
 inline constexpr ObserverProfile kDefaultObserverProfile{65536U, 0.1F, 2U};
 

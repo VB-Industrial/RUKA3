@@ -163,6 +163,8 @@ const ruka3::MechanicalCalibrationSnapshot& get_mechanical_calibration_snapshot(
     return mechanical_calibration.snapshot();
 }
 const ruka3::ServiceMotionSnapshot& get_service_motion_snapshot() { return service_motion; }
+static void update_fault_manager();
+static void update_service_motion();
 
 void service_cancel() {
     service_motion = {};
@@ -213,10 +215,49 @@ bool service_set_position(float position) {
     if (!motor || !std::isfinite(position) || !joint_controller.accepts_motor_commands() ||
         !output_observer.snapshot().initialized ||
         (limits.limits_valid && (position < limits.lower_limit || position > limits.upper_limit))) return false;
+    const float start = output_observer.snapshot().fused_angle;
+    const float delta = position - start;
+    const float distance = std::fabs(delta);
+    const auto& tuning = ruka3::joint_profile(RUKA3_JOINT_INDEX).command;
+    const float max_velocity = tuning.service_position_velocity_rad_s;
+    const float acceleration = tuning.service_position_acceleration_rad_s2;
+    if (max_velocity <= 0.0F || acceleration <= 0.0F) return false;
+
+    const float full_acceleration_distance = max_velocity * max_velocity / acceleration;
+    const bool triangular = distance <= full_acceleration_distance;
+    const float peak_velocity = triangular ? std::sqrt(distance * acceleration) : max_velocity;
+    const float acceleration_time = peak_velocity / acceleration;
+    const float cruise_time = triangular ? 0.0F : (distance - full_acceleration_distance) / max_velocity;
+    const float total_time = acceleration_time * 2.0F + cruise_time;
+    const std::uint32_t started_ms = millis_32();
+
     service_motion.mode = ruka3::ServiceMotionMode::position;
+    while (true) {
+        const float elapsed = static_cast<float>(millis_32() - started_ms) / 1000.0F;
+        if (elapsed >= total_time) break;
+        float travelled = 0.0F;
+        if (elapsed < acceleration_time) {
+            travelled = 0.5F * acceleration * elapsed * elapsed;
+        } else if (elapsed < acceleration_time + cruise_time) {
+            travelled = 0.5F * acceleration * acceleration_time * acceleration_time +
+                peak_velocity * (elapsed - acceleration_time);
+        } else {
+            const float braking_time = total_time - elapsed;
+            travelled = distance - 0.5F * acceleration * braking_time * braking_time;
+        }
+        service_motion.target = start + std::copysign(travelled, delta);
+        output_observer.update(millis_32(), motor->get_shaft_encoder_value(), motor->get_angle());
+        can_fault_monitor.poll();
+        update_fault_manager();
+        update_service_motion();
+        if (service_motion.mode != ruka3::ServiceMotionMode::position ||
+            !joint_controller.accepts_motor_commands()) return false;
+        HAL_Delay(1);
+    }
     service_motion.target = position;
-    service_motion.error = position - output_observer.snapshot().fused_angle;
-    return true;
+    output_observer.update(millis_32(), motor->get_shaft_encoder_value(), motor->get_angle());
+    update_service_motion();
+    return service_motion.mode == ruka3::ServiceMotionMode::position;
 }
 
 static void update_service_motion() {
