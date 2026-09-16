@@ -12,6 +12,16 @@
 #include "command_supervisor.hpp"
 #include "fault_manager.hpp"
 #include "output_state_observer.hpp"
+#include "mechanical_calibration.hpp"
+
+namespace ruka3 {
+enum class ServiceMotionMode : uint8_t { idle, position, voltage };
+struct ServiceMotionSnapshot {
+    ServiceMotionMode mode{ServiceMotionMode::idle};
+    float target{};
+    float error{};
+};
+}  // namespace ruka3
 
 // state_manager.hpp
 // CALIBRATION_PLACEMENT
@@ -51,8 +61,15 @@ const ruka3::FaultSnapshot& get_fault_snapshot();
 const ruka3::CommandSnapshot& get_command_snapshot();
 uint32_t get_joint_state();
 const ruka3::OutputObserverSnapshot& get_output_observer_snapshot();
+const ruka3::MechanicalCalibrationSnapshot& get_mechanical_calibration_snapshot();
+const ruka3::ServiceMotionSnapshot& get_service_motion_snapshot();
 bool set_motor_enabled(bool enabled);
 bool acknowledge_faults();
+bool service_set_zero();
+bool service_set_limit(uint32_t stage);
+bool service_set_voltage(float voltage);
+bool service_set_position(float position);
+void service_cancel();
 EEPROM& get_eeprom();
 bool is_motor_calibrated();
 int32_t get_motor_calibration_offset();

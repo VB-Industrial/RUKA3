@@ -18,6 +18,8 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
     const auto& command = get_command_snapshot();
     const auto& faults = get_fault_snapshot();
     const auto& output = get_output_observer_snapshot();
+    const auto& mechanical = get_mechanical_calibration_snapshot();
+    const auto& service = get_service_motion_snapshot();
     switch (id) {
         case ParameterId::NODE_ID: value.emplace<uint32_t>(ruka3::joint_profile(RUKA3_JOINT_INDEX).node_id); return true;
         case ParameterId::BOOTLOADER: value.emplace<bool>(bootloader_reboot_pending); return true;
@@ -44,6 +46,10 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::CMD_COUNT: value.emplace<uint32_t>(command.accepted_count); return true;
         case ParameterId::CMD_AGE_MS: value.emplace<uint32_t>(command.age_ms); return true;
         case ParameterId::CMD_TIMEOUT: value.emplace<bool>(command.timed_out); return true;
+        case ParameterId::ZERO_SET: value.emplace<bool>(false); return true;
+        case ParameterId::SET_LIMIT: value.emplace<uint32_t>(mechanical.limit_stage); return true;
+        case ParameterId::MOVE: value.emplace<float>(service.mode == ruka3::ServiceMotionMode::voltage ? service.target : 0.0F); return true;
+        case ParameterId::POS_SET: value.emplace<float>(service.mode == ruka3::ServiceMotionMode::position ? service.target : output.fused_angle); return true;
         default: break;
     }
     auto* motor = get_motor();
@@ -64,8 +70,12 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
                 output.encoder_angle, output.output_velocity, output.motor_residual,
                 output.fused_angle, output.fused_velocity, output.fusion_offset,
                 output.encoder_error, static_cast<float>(get_motor_calibration_offset()),
-                static_cast<float>(profile.output_encoder_zero), profile.gear_ratio,
+                static_cast<float>(mechanical.encoder_zero), profile.gear_ratio,
                 static_cast<float>(profile.observer.fusion_encoder_corridor_ticks),
+                mechanical.lower_limit, mechanical.upper_limit,
+                static_cast<float>(mechanical.limit_a_raw), static_cast<float>(mechanical.limit_b_raw),
+                static_cast<float>(mechanical.limit_stage), static_cast<float>(mechanical.limit_direction),
+                static_cast<float>(service.mode), service.target, service.error,
             });
             return true;
         }
@@ -82,6 +92,18 @@ ParameterWriteResult write_runtime_parameter(ParameterId id, const ParameterValu
     }
     if (id == ParameterId::FAULT_ACK) {
         return std::get<bool>(value) && acknowledge_faults() ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    }
+    if (id == ParameterId::ZERO_SET) {
+        return std::get<bool>(value) && service_set_zero() ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    }
+    if (id == ParameterId::SET_LIMIT) {
+        return service_set_limit(std::get<uint32_t>(value)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    }
+    if (id == ParameterId::MOVE) {
+        return service_set_voltage(std::get<float>(value)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    }
+    if (id == ParameterId::POS_SET) {
+        return service_set_position(std::get<float>(value)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
     }
     if (id != ParameterId::IS_ON) return ParameterWriteResult::READ_ONLY;
     const bool requested_on = std::get<bool>(value);

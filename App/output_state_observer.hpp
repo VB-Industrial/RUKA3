@@ -27,6 +27,16 @@ class OutputStateObserver {
 public:
     explicit constexpr OutputStateObserver(OutputObserverConfig config) : config_(config) {}
 
+    void set_encoder_zero(std::uint32_t encoder_zero) {
+        config_.encoder_zero = encoder_zero;
+        snapshot_ = {};
+        previous_angle_ = 0.0F;
+        previous_motor_angle_ = 0.0F;
+        motor_alignment_offset_ = 0.0F;
+        encoder_unwrapped_angle_ = 0.0F;
+        previous_ms_ = 0U;
+    }
+
     void update(std::uint32_t now_ms, std::uint32_t raw_ticks, float motor_angle) {
         if (config_.encoder_cpr == 0U) return;
         const float angle = ticks_to_angle(raw_ticks);
