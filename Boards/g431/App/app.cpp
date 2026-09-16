@@ -433,7 +433,7 @@ void app() {
     apply_calibration();
     motor->set_foc_point(FOCTarget{0});
     // Commissioned calibration makes the joint ready, but it is never armed
-    // merely by booting.  A controller must explicitly write is_on=true.
+    // merely by booting.  A controller must explicitly write arm=true.
     motor->set_state(false);
     command_supervisor.initialize(millis_32(),
                                   ruka3::joint_profile(RUKA3_JOINT_INDEX).safety.command_timeout_ms);

@@ -56,7 +56,7 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
     if (!motor) return false;
     const auto& inverter = static_cast<const VBInverter&>(motor->get_inverter());
     switch (id) {
-        case ParameterId::IS_ON: value.emplace<bool>(motor->is_on()); return true;
+        case ParameterId::ARM: value.emplace<bool>(motor->is_on()); return true;
         case ParameterId::BUS_VOLTAGE: value.emplace<float>(motor->get_voltage()); return true;
         case ParameterId::BUS_CURRENT: value.emplace<float>(motor->get_working_current()); return true;
         case ParameterId::TEMP_MCU: value.emplace<float>(inverter.get_mcu_temperature() + 273.15f); return true;
@@ -102,7 +102,7 @@ ParameterWriteResult write_runtime_parameter(ParameterId id, const ParameterValu
     if (id == ParameterId::POS_SET) {
         return service_set_position(std::get<float>(value)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
     }
-    if (id != ParameterId::IS_ON) return ParameterWriteResult::READ_ONLY;
+    if (id != ParameterId::ARM) return ParameterWriteResult::READ_ONLY;
     const bool requested_on = std::get<bool>(value);
     return set_motor_enabled(requested_on) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
 }

@@ -8,7 +8,7 @@
 enum class ParameterType : uint8_t { REAL32, REAL32_ARRAY, NATURAL32, INTEGER32, BIT, STRING };
 
 enum class ParameterId : uint8_t {
-    NODE_ID, IS_ON, BOOTLOADER, CMD_ERRORS, MODEL, REVISION,
+    NODE_ID, ARM, BOOTLOADER, CMD_ERRORS, MODEL, REVISION,
     BUS_VOLTAGE, BUS_CURRENT, TEMP_MCU, TEMP_STATOR, IS_FAULT,
     GET_ANGLE, CALIB_VALID, CALIB_INVERTED, ZERO_SET, SET_LIMIT, MOVE, POS_SET,
     CAN_ERR_TOTAL, CAN_RX_ERR, CAN_TX_ERR, CAN_ERR_LOG, CAN_ARB_LEC,
@@ -32,7 +32,7 @@ enum class ParameterWriteResult : uint8_t { OK, READ_ONLY, INVALID, UNAVAILABLE 
 
 inline constexpr std::array<ParameterDefinition, 37> PARAMETER_CATALOG{{
     {ParameterId::NODE_ID,         "node_id",       ParameterType::NATURAL32, false, false},
-    {ParameterId::IS_ON,           "is_on",         ParameterType::BIT,       true,  false},
+    {ParameterId::ARM,             "arm",           ParameterType::BIT,       true,  false},
     {ParameterId::BOOTLOADER,      "bootloader",    ParameterType::BIT,       true,  false},
     {ParameterId::CMD_ERRORS,      "cmd_errors",    ParameterType::NATURAL32, false, false},
     {ParameterId::MODEL,           "vbdrive_model", ParameterType::STRING,    false, false},
