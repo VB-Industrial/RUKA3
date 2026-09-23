@@ -389,12 +389,12 @@ void setup_cyphal_comms() {
 
     registers_handler.create(
         std::array<RegisterDefinition, NUMBER_OF_REGISTERS>{{
-            {"set", set_offset_handler},
+            {"set_el_offset", set_offset_handler},
             {"set_pos", set_pos_handler},
-            {"pos_get", pos_get_handler},
-            {"fus_dbg", fus_dbg_handler},
-            {"get_PD", get_pd_handler},
-            {"move", move_handler},
+            {"get_pos", pos_get_handler},
+            {"get_fus_dbg", fus_dbg_handler},
+            {"get_pd", get_pd_handler},
+            {"set_voltage", move_handler},
         }},
         cyphal_interface
     );

@@ -2,12 +2,8 @@
 
 #include "../../../App/robot_config.h"
 
-#ifndef JOINT_N
-#error "JOINT_N must be provided by the RUKA3_JOINT_INDEX CMake setting"
-#endif
-
-static_assert(JOINT_N >= 1 && JOINT_N <= 4);
-inline constexpr auto& active_joint_profile = ruka3::joint_profile(JOINT_N);
+static_assert(ruka3::kFlashedJointIndex >= 1 && ruka3::kFlashedJointIndex <= 4);
+inline constexpr auto& active_joint_profile = ruka3::joint_profile(ruka3::kFlashedJointIndex);
 static_assert(active_joint_profile.board == ruka3::Board::g474);
 
 #define AGENT_JS_SUB_PORT 1001

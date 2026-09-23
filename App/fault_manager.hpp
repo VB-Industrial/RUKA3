@@ -48,8 +48,6 @@ public:
     bool update(const FaultInputs& inputs) {
         std::uint32_t active = fault_none;
         if (inputs.driver_fault) active |= fault_driver;
-        if (inputs.can.bus_off) active |= fault_can_bus_off;
-        if (inputs.can.error_passive) active |= fault_can_passive;
         if (!inputs.calibration_valid) active |= fault_calibration_invalid;
 
         const std::uint32_t blocking = active & kBlockingFaults;
@@ -61,15 +59,15 @@ public:
         snapshot_.stator_temperature_c = inputs.stator_temperature_c;
         if (blocking != 0U) {
             snapshot_.latched |= blocking;
-            snapshot_.stop_reason = (blocking & fault_driver) != 0U
-                ? StopReason::driver_fault : StopReason::can_bus_off;
+            snapshot_.stop_reason = StopReason::driver_fault;
             snapshot_.level = FaultLevel::fault;
-        } else if ((active & fault_can_passive) != 0U) {
-            snapshot_.level = FaultLevel::degraded;
         } else if ((active & fault_calibration_invalid) != 0U) {
             snapshot_.level = FaultLevel::warning;
         } else {
             snapshot_.level = FaultLevel::nominal;
+        }
+        if (snapshot_.latched == 0U) {
+            snapshot_.stop_reason = StopReason::none;
         }
         snapshot_.network_state = inputs.can.bus_off ? NetworkState::offline
             : inputs.can.error_passive ? NetworkState::degraded : NetworkState::online;
@@ -87,7 +85,7 @@ public:
     [[nodiscard]] const FaultSnapshot& snapshot() const { return snapshot_; }
 
 private:
-    static constexpr std::uint32_t kBlockingFaults = fault_driver | fault_can_bus_off;
+    static constexpr std::uint32_t kBlockingFaults = fault_driver;
     FaultSnapshot snapshot_{};
     std::uint32_t previous_blocking_{};
     bool initialized_{};

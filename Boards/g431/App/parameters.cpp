@@ -56,7 +56,7 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
     if (!motor) return false;
     const auto& inverter = static_cast<const VBInverter&>(motor->get_inverter());
     switch (id) {
-        case ParameterId::ARM: value.emplace<bool>(motor->is_on()); return true;
+        case ParameterId::ARM: value.emplace<bool>(is_motor_enabled()); return true;
         case ParameterId::BUS_VOLTAGE: value.emplace<float>(motor->get_voltage()); return true;
         case ParameterId::BUS_CURRENT: value.emplace<float>(motor->get_working_current()); return true;
         case ParameterId::TEMP_MCU: value.emplace<float>(inverter.get_mcu_temperature() + 273.15f); return true;
@@ -66,7 +66,9 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
             value.emplace<AngleDiagnostics>(AngleDiagnostics{
                 static_cast<float>(motor->get_shaft_encoder_value()),
                 static_cast<float>(motor->get_rotor_encoder_value()),
-                motor->get_angle(), motor->get_velocity(), motor->get_electric_angle(),
+                static_cast<float>(ruka3::joint_profile(RUKA3_JOINT_INDEX).position_direction) * motor->get_angle(),
+                static_cast<float>(ruka3::joint_profile(RUKA3_JOINT_INDEX).position_direction) * motor->get_velocity(),
+                motor->get_electric_angle(),
                 output.encoder_angle, output.output_velocity, output.motor_residual,
                 output.fused_angle, output.fused_velocity, output.fusion_offset,
                 output.encoder_error, static_cast<float>(get_motor_calibration_offset()),
@@ -76,11 +78,21 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
                 static_cast<float>(mechanical.limit_a_raw), static_cast<float>(mechanical.limit_b_raw),
                 static_cast<float>(mechanical.limit_stage), static_cast<float>(mechanical.limit_direction),
                 static_cast<float>(service.mode), service.target, service.error,
+                mechanical.soft_lower_limit, mechanical.soft_upper_limit,
+                static_cast<float>(mechanical.safe_margin_ticks),
+                mechanical.zero_valid ? 1.0F : 0.0F,
+                mechanical.limits_valid ? 1.0F : 0.0F,
+                output.encoder_prediction_error,
+                output.reversal_peak,
+                static_cast<float>(output.motor_direction),
+                output.expected_backlash_rad,
             });
             return true;
         }
         case ParameterId::CALIB_VALID: value.emplace<bool>(is_motor_calibrated()); return true;
         case ParameterId::CALIB_INVERTED: value.emplace<bool>(is_motor_encoder_inverted()); return true;
+        case ParameterId::MOTOR_CALIB: value.emplace<bool>(is_motor_calibration_pending()); return true;
+        case ParameterId::DRIVER_WAKE: value.emplace<bool>(is_driver_awake()); return true;
         default: return false;
     }
 }
@@ -92,6 +104,14 @@ ParameterWriteResult write_runtime_parameter(ParameterId id, const ParameterValu
     }
     if (id == ParameterId::FAULT_ACK) {
         return std::get<bool>(value) && acknowledge_faults() ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    }
+    if (id == ParameterId::MOTOR_CALIB) {
+        return std::get<bool>(value) && request_motor_calibration()
+            ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    }
+    if (id == ParameterId::DRIVER_WAKE) {
+        return set_driver_awake(std::get<bool>(value))
+            ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
     }
     if (id == ParameterId::SET_LIMIT) {
         return service_set_limit(std::get<uint32_t>(value)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;

@@ -10,8 +10,6 @@ struct CommandSnapshot {
     bool timed_out{};
 };
 
-// Phase 1 is deliberately diagnostic-only.  The application reads the
-// timeout state but does not alter the motor target or drive enable yet.
 class CommandSupervisor {
 public:
     void initialize(std::uint32_t now_ms, std::uint32_t timeout_ms) {

@@ -60,10 +60,8 @@ FOC& get_motor() {
             .current_limit = motor_profile.current_limit,
             .user_current_limit = motor_profile.current_limit,
             .user_torque_limit = motor_profile.torque_limit,
-            .user_position_lower_limit = (profile.position_upper_limit == 0.0f && profile.position_lower_limit == 0.0f)
-                ? -FLOAT_INF : profile.position_lower_limit,
-            .user_position_upper_limit = (profile.position_upper_limit == 0.0f && profile.position_lower_limit == 0.0f)
-                ? FLOAT_INF : profile.position_upper_limit,
+            .user_position_lower_limit = -FLOAT_INF,
+            .user_position_upper_limit = FLOAT_INF,
         },
         DriveInfo{
             .torque_const = motor_profile.torque_const,

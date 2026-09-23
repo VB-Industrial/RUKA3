@@ -234,10 +234,10 @@ void publish_safe_state() {
     );
     registers_handler.create(
         std::array<RegisterDefinition, 4>{{
-            {"node.id", read_node_id},
-            {"command.bootloader", request_bootloader},
-            {"network.online", read_network_online},
-            {"network.timeout_ms", read_network_timeout_ms},
+            {"get_node_id", read_node_id},
+            {"set_bootloader", request_bootloader},
+            {"get_net_online", read_network_online},
+            {"get_net_timeout", read_network_timeout_ms},
         }},
         interface
     );

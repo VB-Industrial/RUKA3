@@ -60,6 +60,7 @@ const ruka3::CanFaultSnapshot& get_can_fault_snapshot();
 const ruka3::FaultSnapshot& get_fault_snapshot();
 const ruka3::CommandSnapshot& get_command_snapshot();
 uint32_t get_joint_state();
+bool is_motor_enabled();
 const ruka3::OutputObserverSnapshot& get_output_observer_snapshot();
 const ruka3::MechanicalCalibrationSnapshot& get_mechanical_calibration_snapshot();
 const ruka3::ServiceMotionSnapshot& get_service_motion_snapshot();
@@ -74,6 +75,10 @@ EEPROM& get_eeprom();
 bool is_motor_calibrated();
 int32_t get_motor_calibration_offset();
 bool is_motor_encoder_inverted();
+bool is_motor_calibration_pending();
+bool request_motor_calibration();
+bool is_driver_awake();
+bool set_driver_awake(bool awake);
 float get_motor_electric_angle();
 // actions (in app.cpp)
 bool is_able_to_calibrate();

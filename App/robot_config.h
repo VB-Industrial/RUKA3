@@ -5,7 +5,16 @@
 namespace ruka3 {
 
 enum class Board : std::uint8_t { g474, g431 };
-enum class PositionSource : std::uint8_t { rotor, shaft };
+
+#ifndef RUKA3_JOINT_INDEX
+#error "RUKA3_JOINT_INDEX must be selected by the firmware build"
+#endif
+
+// The single compile-time identity of the firmware image being built.  CMake
+// supplies it from the selected joint task; all board code should use this
+// name rather than carry a second local joint number.
+inline constexpr std::uint8_t kFlashedJointIndex =
+    static_cast<std::uint8_t>(RUKA3_JOINT_INDEX);
 
 struct MotorProfile {
     float control_period_s;
@@ -26,7 +35,6 @@ struct MotorProfile {
     float filter_g3;
     float current_lpf;
     std::uint8_t pole_pairs;
-    PositionSource position_source;
 };
 
 struct TemperatureLimits {
@@ -56,12 +64,21 @@ struct CommandTuning {
     std::int32_t register_position_deadband_ticks;
     float service_position_velocity_rad_s;
     float service_position_acceleration_rad_s2;
+    std::uint16_t service_position_update_hz;
 };
 
 struct ObserverProfile {
     std::uint32_t output_encoder_cpr;
     float output_velocity_lpf;
     std::uint8_t fusion_encoder_corridor_ticks;
+    // Measured output-side free play.  It is diagnostic information, not a
+    // coordinate correction: the absolute output encoder remains the truth.
+    float expected_backlash_rad;
+};
+
+struct CommunicationProfile {
+    std::uint16_t feedback_update_hz;
+    std::uint16_t temperature_update_hz;
 };
 
 struct JointProfile {
@@ -72,21 +89,22 @@ struct JointProfile {
     std::uint16_t servo_subject_id;
     std::uint16_t velocity_subject_id;
     float gear_ratio;
-    std::int8_t motor_encoder_sign;
-    std::int8_t motor_command_sign;
-    std::int8_t output_encoder_sign;
+    // The first three signs describe the native mechanical coordinate.  The
+    // final sign converts it to the public coordinate of the robot joint.
+    std::int8_t motor_encoder_sign;   // Raw motor encoder increment to positive native motor angle.
+    std::int8_t motor_command_sign;   // Raw voltage increment to positive native output motion.
+    std::int8_t output_encoder_sign;  // Raw output encoder increment to positive native output angle.
     std::uint16_t motor_electrical_offset;
     std::uint16_t output_encoder_zero;
     std::int8_t dh_rotation;
     float speed_limit;
     float position_offset;
-    float position_lower_limit;
-    float position_upper_limit;
-    std::int8_t position_direction;
+    std::int8_t position_direction;   // Native angle/velocity/torque to the public joint coordinate.
     MotorProfile motor;
     SafetyProfile safety;
     CommandTuning command;
     ObserverProfile observer;
+    CommunicationProfile communication;
 };
 
 inline constexpr SafetyProfile kDefaultSafetyProfile{
@@ -107,11 +125,12 @@ inline constexpr CommandTuning kDefaultCommandTuning{
     .register_position_deadband_ticks = 8,
     .service_position_velocity_rad_s = 0.5F,
     .service_position_acceleration_rad_s2 = 1.0F,
+    .service_position_update_hz = 100U,
 };
 // J5/J6 have been validated at this position stiffness.  A velocity term made
 // the compact joints vibrate, so service position hold keeps it at zero.
 inline constexpr CommandTuning kG431CommandTuning{
-    .default_position_kp = 5.0F,
+    .default_position_kp = 20.0F,
     .default_velocity_kp = 0.0F,
     .default_torque_kp = 0.5F,
     .acquire_threshold_rad = 0.5F,
@@ -123,8 +142,17 @@ inline constexpr CommandTuning kG431CommandTuning{
     .register_position_deadband_ticks = 8,
     .service_position_velocity_rad_s = 0.5F,
     .service_position_acceleration_rad_s2 = 1.0F,
+    .service_position_update_hz = 100U,
 };
-inline constexpr ObserverProfile kDefaultObserverProfile{65536U, 0.1F, 2U};
+inline constexpr ObserverProfile kDefaultObserverProfile{65536U, 0.1F, 2U, 0.0F};
+inline constexpr CommunicationProfile kDefaultCommunicationProfile{
+    .feedback_update_hz = 100U,
+    .temperature_update_hz = 10U,
+};
+// J6: measured around the zero pose by rocking the motor with Kp=30.  The
+// output encoder stayed still while the geared motor estimate traversed about
+// 0.006 rad, then the output began to move.
+inline constexpr ObserverProfile kJ6ObserverProfile{65536U, 0.1F, 2U, 0.006F};
 
 inline constexpr MotorProfile kG474MotorProfile{
     .control_period_s = 0.00005F, .torque_const = 0.011F,
@@ -134,7 +162,7 @@ inline constexpr MotorProfile kG474MotorProfile{
     .current_pid_kd = 0.0F, .filter_expected_a = 0.0F,
     .filter_g1 = 0.015700989410003974F, .filter_g2 = 3.925227776360174F,
     .filter_g3 = 387.54711795263574F, .current_lpf = 0.0925F,
-    .pole_pairs = 14, .position_source = PositionSource::rotor,
+    .pole_pairs = 14,
 };
 
 // J5/J6 preserve the presently commissioned 2 A limit.  The remaining values
@@ -148,18 +176,18 @@ inline constexpr MotorProfile kG431MotorProfile{
     .current_pid_kd = 0.0F, .filter_expected_a = 0.0F,
     .filter_g1 = 0.015700989410003974F, .filter_g2 = 3.925227776360174F,
     .filter_g3 = 387.54711795263574F, .current_lpf = 0.0925F,
-    .pole_pairs = 14, .position_source = PositionSource::rotor,
+    .pole_pairs = 14,
 };
 
 // This table is the only CAN identity authority for all six joints.
 // Calibration offsets remain in the board-specific persistent record.
 inline constexpr JointProfile kJointProfiles[] = {
-    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
-    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
-    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
-    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile},
-    {5, Board::g431, 105, 1001, 1125, 1135, 10.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kDefaultObserverProfile},
-    {6, Board::g431, 106, 1001, 1126, 1136, 10.0F,  1, -1,  1,    0, 52076, -1, 0.0F, 0.0F, -3.12413936F, 3.12413936F, 1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kDefaultObserverProfile},
+    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
+    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
+    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
+    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
+    {5, Board::g431, 105, 1001, 1125, 1135, 10.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
+    {6, Board::g431, 106, 1001, 1126, 1136, 10.0F,  1,  1,  1,    0, 52076, -1, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kJ6ObserverProfile, kDefaultCommunicationProfile},
 };
 
 constexpr bool motor_profile_is_valid(const MotorProfile& profile) {
@@ -175,14 +203,13 @@ constexpr bool motor_profile_is_valid(const MotorProfile& profile) {
 
 constexpr bool joint_profiles_are_valid() {
     for (const auto& profile : kJointProfiles) {
-        const bool position_limits_disabled =
-            profile.position_lower_limit == 0.0F && profile.position_upper_limit == 0.0F;
-        const bool position_limits_valid = position_limits_disabled ||
-            profile.position_lower_limit < profile.position_upper_limit;
         if (profile.index == 0U || profile.node_id == 0U || profile.gear_ratio <= 0.0F ||
             profile.speed_limit < 0.0F ||
+            profile.communication.feedback_update_hz == 0U ||
+            profile.communication.feedback_update_hz > 1000U ||
+            profile.communication.temperature_update_hz == 0U ||
+            profile.communication.temperature_update_hz > 1000U ||
             (profile.position_direction != -1 && profile.position_direction != 1) ||
-            !position_limits_valid ||
             !motor_profile_is_valid(profile.motor)) {
             return false;
         }

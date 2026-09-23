@@ -87,17 +87,6 @@ void FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buf
         }
     };
 
-    // Sanity check: quarter mechanical turn forward (open-loop)
-    {
-        const float elec_step = 0.5f;
-        const float end_angle = pi2 * (float)drive_info.common.ppairs * drive_info.common.gear_ratio / 4;
-        float ang = 0.0f;
-        while (ang < end_angle) {
-            set_electric_angle(ang, 10);
-            ang += elec_step;
-        }
-    }
-
 //#pragma region Electrical Offset
     const int ppairs = drive_info.common.ppairs;
     const int samples_count = ppairs * 2;
