@@ -26,10 +26,12 @@ public:
     }
 
     // Returns true once on the transition into timeout.
-    bool update(std::uint32_t now_ms) {
+    void complete_autonomous_command(std::uint32_t now_ms) { last_command_ms_ = now_ms; }
+
+    bool update(std::uint32_t now_ms, bool autonomous_motion = false) {
         if (!initialized_) initialize(now_ms, timeout_ms_);
         snapshot_.age_ms = now_ms - last_command_ms_;
-        const bool timed_out = received_command_ && snapshot_.age_ms > timeout_ms_;
+        const bool timed_out = received_command_ && !autonomous_motion && snapshot_.age_ms > timeout_ms_;
         const bool entered_timeout = timed_out && !snapshot_.timed_out;
         snapshot_.timed_out = timed_out;
         return entered_timeout;

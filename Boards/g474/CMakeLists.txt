@@ -88,6 +88,13 @@ target_sources(${PROJECT_NAME} PRIVATE
     ${LIBVOLTBRO_SOURCES}
     ${LIBCXXCANARD_SOURCES}
 )
+if(NOT RUKA3_BOOTSTRAP)
+    target_sources(${PROJECT_NAME} PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../../App/encoder_calibration.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../../App/calibration_service.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../../App/joint_parameters.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../../App/encoder_calibration_storage.c")
+endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${FIRMWARE_APP_DIR}"
@@ -132,6 +139,7 @@ ExternalProject_Add(g474_vbboot
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
         -DCMAKE_TOOLCHAIN_FILE=${VBBOOT_SOURCE_DIR}/cmake/gcc-arm-none-eabi.cmake
+        -DCMAKE_PROJECT_VBBoot_INCLUDE=${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/vbboot_can_profile.cmake
         -DBOOTLOADER_MCU=STM32G474xx
         -DBOOTLOADER_STARTUP_FILE=${CMAKE_CURRENT_LIST_DIR}/startup_stm32g474xx.s
         -DBOOTLOADER_APP_END=0x08080000UL

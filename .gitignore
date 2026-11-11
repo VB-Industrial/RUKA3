@@ -3,3 +3,7 @@ Boards/*/build/
 .vscode/.cmake/
 compile_commands.json
 .DS_Store
+
+# Python test/tool caches
+__pycache__/
+*.py[cod]

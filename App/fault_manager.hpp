@@ -8,7 +8,7 @@ namespace ruka3 {
 
 // Values exposed via Cyphal registers; keep their numeric representation stable.
 enum class FaultLevel : std::uint32_t { nominal = 0, warning = 1, degraded = 2, fault = 3 };
-enum class StopReason : std::uint32_t { none = 0, driver_fault = 1, can_bus_off = 2 };
+enum class StopReason : std::uint32_t { none = 0, driver_fault = 1, can_bus_off = 2, current_loop_fault = 3 };
 enum class NetworkState : std::uint32_t { starting = 0, online = 1, degraded = 2, offline = 3 };
 
 enum FaultBit : std::uint32_t {
@@ -17,6 +17,7 @@ enum FaultBit : std::uint32_t {
     fault_can_bus_off = 1U << 1U,
     fault_can_passive = 1U << 2U,
     fault_calibration_invalid = 1U << 3U,
+    fault_current_loop = 1U << 4U,
 };
 
 struct FaultSnapshot {
@@ -37,6 +38,7 @@ struct FaultInputs {
     bool driver_fault{};
     float mcu_temperature_c{};
     float stator_temperature_c{};
+    bool current_loop_fault{};
 };
 
 // Application-level policy only. app.cpp owns the physical motor stop action.
@@ -49,6 +51,7 @@ public:
         std::uint32_t active = fault_none;
         if (inputs.driver_fault) active |= fault_driver;
         if (!inputs.calibration_valid) active |= fault_calibration_invalid;
+        if (inputs.current_loop_fault) active |= fault_current_loop;
 
         const std::uint32_t blocking = active & kBlockingFaults;
         const bool entered_blocking = initialized_ && blocking != 0U && previous_blocking_ == 0U;
@@ -59,7 +62,7 @@ public:
         snapshot_.stator_temperature_c = inputs.stator_temperature_c;
         if (blocking != 0U) {
             snapshot_.latched |= blocking;
-            snapshot_.stop_reason = StopReason::driver_fault;
+            snapshot_.stop_reason = (blocking & fault_driver) ? StopReason::driver_fault : StopReason::current_loop_fault;
             snapshot_.level = FaultLevel::fault;
         } else if ((active & fault_calibration_invalid) != 0U) {
             snapshot_.level = FaultLevel::warning;
@@ -85,7 +88,7 @@ public:
     [[nodiscard]] const FaultSnapshot& snapshot() const { return snapshot_; }
 
 private:
-    static constexpr std::uint32_t kBlockingFaults = fault_driver;
+    static constexpr std::uint32_t kBlockingFaults = fault_driver | fault_current_loop;
     FaultSnapshot snapshot_{};
     std::uint32_t previous_blocking_{};
     bool initialized_{};

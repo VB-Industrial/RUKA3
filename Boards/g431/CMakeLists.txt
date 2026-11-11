@@ -116,10 +116,23 @@ else()
     list(FILTER USER_SOURCES EXCLUDE REGEX "/bootstrap\\.cpp$")
 endif()
 file(GLOB_RECURSE LIBVOLTBRO_SOURCES "Drivers/libvoltbro/*.cpp" "Drivers/libvoltbro/*.c")
+# Motor calibration runs on the MCU stack: reject accidental table-sized copies.
+set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/Drivers/libvoltbro/voltbro/motors/bldc/foc/calibration.cpp"
+    PROPERTIES COMPILE_OPTIONS "-Werror=frame-larger-than=1024"
+)
+
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${USER_SOURCES}
     ${LIBVOLTBRO_SOURCES}
 )
+if(NOT RUKA3_BOOTSTRAP)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../../App/encoder_calibration.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../../App/calibration_service.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../../App/joint_parameters.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../../App/encoder_calibration_storage.c")
+endif()
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     App
@@ -208,6 +221,8 @@ ExternalProject_Add(VBBoot_firmware
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
         -DCMAKE_TOOLCHAIN_FILE=${VBBOOT_SOURCE_DIR}/cmake/gcc-arm-none-eabi.cmake
+        -DCMAKE_PROJECT_VBBoot_INCLUDE=${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/vbboot_can_profile.cmake
+        -DBOOTLOADER_FDCAN_CLOCK_SOURCE=PCLK1
         -DBOOTLOADER_FDCAN_ID_FORMAT=${BOOTLOADER_FDCAN_ID_FORMAT}
         -DBOOTLOADER_DEFAULT_NODE_ID=${RUKA3_NODE_ID}
         -DBOOTLOADER_USE_EEPROM_CONFIG=${RUKA3_BOOTLOADER_USE_EEPROM_CONFIG}

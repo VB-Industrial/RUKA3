@@ -32,7 +32,7 @@ GenericEncoder& get_gear_encoder() {
 FOC& get_motor() {
     constexpr auto& profile = active_joint_profile;
     constexpr auto& motor_profile = profile.motor;
-    static Inverter inverter(&hadc1);
+    static Inverter inverter(&hadc1, ruka3::kG474CurrentSense);
     static FOC motor_controller(
         motor_profile.control_period_s,
         FiltersConfig{
@@ -46,19 +46,19 @@ FOC& get_motor() {
             .kp = motor_profile.current_pid_kp,
             .ki = motor_profile.current_pid_ki,
             .kd = motor_profile.current_pid_kd,
-            .max_output = motor_profile.max_voltage,
-            .min_output = -motor_profile.max_voltage,
+            .max_output = ruka3::kG474CommissioningVoltageLimitV,
+            .min_output = -ruka3::kG474CommissioningVoltageLimitV,
         },
         PIDConfig{
             .kp = motor_profile.current_pid_kp,
             .ki = motor_profile.current_pid_ki,
             .kd = motor_profile.current_pid_kd,
-            .max_output = motor_profile.max_voltage,
-            .min_output = -motor_profile.max_voltage,
+            .max_output = ruka3::kG474CommissioningVoltageLimitV,
+            .min_output = -ruka3::kG474CommissioningVoltageLimitV,
         },
         DriveLimits{
-            .current_limit = motor_profile.current_limit,
-            .user_current_limit = motor_profile.current_limit,
+            .current_limit = ruka3::kG474CommissioningCurrentLimitA,
+            .user_current_limit = ruka3::kG474CommissioningCurrentLimitA,
             .user_torque_limit = motor_profile.torque_limit,
             .user_position_lower_limit = -FLOAT_INF,
             .user_position_upper_limit = FLOAT_INF,
@@ -71,6 +71,10 @@ FOC& get_motor() {
             .stall_timeout = motor_profile.stall_timeout_s,
             .stall_tolerance = motor_profile.stall_tolerance,
             .calibration_voltage = motor_profile.calibration_voltage,
+            .current_direction = profile.motor_command_sign,
+            .modulation_voltage_ratio = ruka3::kG474ModulationVoltageRatio,
+            .max_pwm_ticks = RUKA3_G474_MAX_PWM_TICKS,
+            .phase_current_trip_a = ruka3::kG474PhaseOvercurrentTripA,
             .l_pins = std::array<GpioPin, 3>{
                 GpioPin(INLA_GPIO_Port, INLA_Pin),
                 GpioPin(INLB_GPIO_Port, INLB_Pin),
@@ -94,6 +98,7 @@ FOC& get_motor() {
             .blend = 0.5f,
             .velocity_blend = 0.15f,
             .velocity_lpf_coefficient = 0.05f,
+            .output_calibration = &get_output_calibration_core(),
         }
     );
     return motor_controller;

@@ -428,8 +428,8 @@ public:
         }
 
         // Control the PWM bridge without changing the STSPIN power state.
-        // This is used by logical arm/disarm: standby is reserved for faults
-        // and explicit power-management operations.
+        // Logical arm/disarm and fault handling keep STSPIN awake. Standby is
+        // reserved for explicit power-management operations.
         HAL_StatusTypeDef set_bridge_outputs_enabled(bool enabled) {
             if (!enabled) {
                 _is_on = false;
@@ -439,14 +439,13 @@ public:
             }
 
             bootstrap_charge_deadline_ms = HAL_GetTick() + bootstrap_charge_time_ms;
-            __HAL_TIM_MOE_ENABLE(htim);
             force_bootstrap_charge();
             const HAL_StatusTypeDef result = gate_driver.clear_faults();
             if (result != HAL_OK) {
-                __HAL_TIM_MOE_DISABLE(htim);
                 bootstrap_charge_deadline_ms = 0;
                 return result;
             }
+            __HAL_TIM_MOE_ENABLE(htim);
             quit_stall();
             _is_on = true;
             return HAL_OK;

@@ -1,4 +1,5 @@
 #pragma once
+#include "encoder_calibration.hpp"
 #include <cstdint>
 #include "voltbro/encoders/generic.h"
 #if defined(STM32G4) || defined(STM32_G)
@@ -52,9 +53,19 @@ struct FOCTarget {
     float torque = 0.0f;
     float angle = 0.0f;
     float velocity = 0.0f;
+    // Motor-side torque per output-coordinate error; public gains / gear_ratio.
     float angle_kp = 0.0f;
     float velocity_kp = 0.0f;
 };
+
+struct CurrentLoopSnapshot {
+    float id;
+    float iq;
+    float iq_target;
+    float vd;
+    float vq;
+};
+enum class CurrentLoopFault : std::uint8_t { none = 0, phase_overcurrent = 1, invalid_bus_voltage = 2 };
 
 struct FiltersConfig {
     float expected_a;
@@ -72,6 +83,7 @@ struct FusionConfig {
     float blend = 0.5f;
     float velocity_blend = 0.2f;
     float velocity_lpf_coefficient = 0.1f;
+    const EncoderCalibration* output_calibration = nullptr;
 };
 
 struct WrappedKalmanState {
@@ -89,13 +101,20 @@ class FOC: public BLDCController  {
 protected:
     float T;
     float raw_elec_angle = 0;
+    float gear_measurement_angle = 0;
     float elec_angle = 0;
     float I_Q = 0;
+    float I_D = 0;
+    float V_d = 0;
+    float V_q = 0;
+    float i_q_set = 0;
+    volatile CurrentLoopFault current_fault = CurrentLoopFault::none;
     calibration_array_t* lookup_table = nullptr;
     GenericEncoder& encoder;
     const FiltersConfig filters_config;
     const FusionConfig fusion_config;
     FOCTarget foc_target;
+    const float voltage_limit;
     PIDRegulator q_reg;
     PIDRegulator d_reg;
     PIDRegulator control_reg = PIDRegulator();
@@ -122,7 +141,7 @@ public:
     void apply_calibration(CalibrationData& calibration_data) {
         // Replace config parameters with the ones loaded from EEPROM
         // Very ugly hack, but it will work for now
-        const_cast<int&>(encoder.electric_offset) = calibration_data.meas_elec_offset;
+        encoder.electric_offset = calibration_data.meas_elec_offset;
 #ifdef USE_CALIBRATION_ARRAY
         #pragma GCC diagnostic push
         #pragma GCC diagnostic ignored "-Waddress-of-packed-member"
@@ -130,7 +149,7 @@ public:
         lookup_table = &(calibration_data.calibration_array);
         #pragma GCC diagnostic pop
 #endif
-        const_cast<bool&>(encoder.is_inverted) = calibration_data.is_encoder_inverted;
+        encoder.is_inverted = calibration_data.is_encoder_inverted;
     }
 
     FOC(
@@ -155,18 +174,78 @@ public:
         encoder(encoder),
         filters_config(std::move(filters_config)),
         fusion_config(fusion_config),
+        voltage_limit(q_config.max_output),
         q_reg(std::move(q_config)),
         d_reg(std::move(d_config))
         {}
+
+    // Corrected rotor angle (offset/LUT applied), before the native observer.
+    float get_preobserver_rotor_angle() const { return raw_elec_angle; }
 
     float get_electric_angle() {
         return elec_angle;
     }
     float get_working_current() {
-        return I_Q;
+        return drive_info.current_direction * I_Q;
+    }
+    CurrentLoopSnapshot current_snapshot() const { return {I_D, I_Q, i_q_set, V_d, V_q}; }
+    float get_current_limit() const { return drive_limits.current_limit; }
+    SetPointType get_point_type() const { return point_type; }
+    CurrentLoopFault get_current_fault() const { return current_fault; }
+    bool clear_current_fault() {
+        if (is_on() || !(inverter.get_busV() > 0.0F) ||
+            std::fabs(inverter.get_A()) > drive_info.phase_current_trip_a ||
+            std::fabs(inverter.get_B()) > drive_info.phase_current_trip_a ||
+            std::fabs(inverter.get_C()) > drive_info.phase_current_trip_a) return false;
+        current_fault = CurrentLoopFault::none;
+        return true;
+    }
+    float get_current_target() const {
+        return point_type == SetPointType::CURRENT ? target : 0.0F;
+    }
+    float get_position_target() const {
+        return point_type == SetPointType::UNIVERSAL ? foc_target.angle : get_fusion_angle();
+    }
+    void reset_control() {
+        q_reg.reset();
+        d_reg.reset();
+        control_reg.reset();
+        i_q_set = V_d = V_q = 0.0F;
+    }
+    HAL_StatusTypeDef start() override {
+        if (current_fault != CurrentLoopFault::none) return HAL_ERROR;
+        reset_control();
+        return BLDCController::start();
+    }
+    HAL_StatusTypeDef stop() override {
+        const auto result = BLDCController::stop();
+        reset_control();
+        return result;
+    }
+    void set_pwm() override {
+        for (auto& value : DQs) value = std::min(value, drive_info.max_pwm_ticks);
+        BLDCController::set_pwm();
+    }
+    // Current target is native joint-oriented amperes; only the q-axis sign
+    // is applied inside the loop. position_direction belongs to the caller.
+    void set_current_point(float amps) {
+        CRITICAL_SECTION({
+            if (point_type != SetPointType::CURRENT) reset_control();
+            target = amps;
+            point_type = SetPointType::CURRENT;
+        })
     }
     float get_gear_angle() const {
         return gear_angle;
+    }
+    float get_gear_measurement_angle() const { return gear_measurement_angle; }
+    bool has_output_calibration() const { return fusion_config.output_calibration != nullptr && fusion_config.output_calibration->has_stored_data(); }
+    void reset_output_tracking() {
+        CRITICAL_SECTION({
+            gear_kalman_state = {};
+            fusion_offset_initialized = false;
+            fusion_velocity_initialized = false;
+        })
     }
     float get_gear_velocity() const {
         return gear_velocity;
@@ -184,7 +263,7 @@ public:
         return encoder.electric_offset;
     }
     void set_encoder_electric_offset(int new_offset) {
-        const_cast<int&>(encoder.electric_offset) = new_offset;
+        encoder.electric_offset = new_offset;
         motor_kalman_state = WrappedKalmanState{};
         fusion_offset_initialized = false;
         fusion_velocity_initialized = false;
@@ -201,8 +280,11 @@ public:
     }
 
     void set_foc_point(FOCTarget&& target) {
-        point_type = SetPointType::UNIVERSAL;
-        foc_target = std::move(target);
+        CRITICAL_SECTION({
+            if (point_type != SetPointType::UNIVERSAL) reset_control();
+            foc_target = std::move(target);
+            point_type = SetPointType::UNIVERSAL;
+        })
     }
     void update_q_config(PIDConfig&& new_config) {
         q_reg.update_config(std::move(new_config));

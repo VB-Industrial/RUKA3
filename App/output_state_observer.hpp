@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <initializer_list>
+#include "encoder_calibration.hpp"
 
 namespace ruka3 {
 
@@ -11,6 +13,7 @@ struct OutputObserverConfig {
     float velocity_lpf{0.1F};
     std::uint8_t fusion_encoder_corridor_ticks{2U};
     float expected_backlash_rad{};
+    float fusion_encoder_weight{1.0F};
 };
 
 struct OutputObserverSnapshot {
@@ -36,6 +39,7 @@ struct OutputObserverSnapshot {
 class OutputStateObserver {
 public:
     explicit constexpr OutputStateObserver(OutputObserverConfig config) : config_(config) {}
+    void set_calibration(const EncoderCalibration* calibration) { calibration_ = calibration; }
 
     void set_encoder_zero(std::uint32_t encoder_zero) {
         config_.encoder_zero = encoder_zero;
@@ -44,19 +48,31 @@ public:
         previous_motor_angle_ = 0.0F;
         motor_alignment_offset_ = 0.0F;
         encoder_unwrapped_angle_ = 0.0F;
+        motor_unwrapped_angle_ = 0.0F;
         motor_motion_accumulator_ = 0.0F;
         motor_direction_ = 0;
         previous_ms_ = 0U;
     }
 
+    void set_calibrated_limits(float lower, float upper) {
+        lower_limit_ = lower;
+        upper_limit_ = upper;
+        limits_valid_ = true;
+    }
+
     void update(std::uint32_t now_ms, std::uint32_t raw_ticks, float motor_angle) {
         if (config_.encoder_cpr == 0U) return;
-        const float angle = ticks_to_angle(raw_ticks);
+        std::int32_t corrected{};
+        const float angle = calibration_ != nullptr && calibration_->calibrated_position_ticks(raw_ticks, corrected)
+            ? static_cast<float>(config_.encoder_sign) * kTwoPi * corrected / config_.encoder_cpr
+            : ticks_to_angle(raw_ticks);
         if (!snapshot_.initialized) {
+            const float initial_angle = unwrap_into_calibrated_range(angle);
             snapshot_.encoder_angle = angle;
-            encoder_unwrapped_angle_ = angle;
-            motor_alignment_offset_ = angle - motor_angle;
-            snapshot_.fused_angle = angle;
+            encoder_unwrapped_angle_ = initial_angle;
+            motor_alignment_offset_ = initial_angle - motor_angle;
+            motor_unwrapped_angle_ = initial_angle;
+            snapshot_.fused_angle = initial_angle;
             previous_angle_ = angle;
             previous_motor_angle_ = motor_angle;
             previous_ms_ = now_ms;
@@ -71,6 +87,7 @@ public:
             const float previous_fused_angle = snapshot_.fused_angle;
             const float motor_delta = wrap_pi(motor_angle - previous_motor_angle_);
             float predicted_angle = previous_fused_angle + motor_delta;
+            motor_unwrapped_angle_ += motor_delta;
             const float corridor = kTwoPi * static_cast<float>(config_.fusion_encoder_corridor_ticks) /
                                    static_cast<float>(config_.encoder_cpr);
             update_motor_direction(motor_delta);
@@ -80,8 +97,13 @@ public:
             if (prediction_error_abs > snapshot_.reversal_peak) {
                 snapshot_.reversal_peak = prediction_error_abs;
             }
-            if (prediction_error_abs > corridor) {
-                predicted_angle += prediction_error - signed_value(corridor, prediction_error);
+            // Weight against a separate motor anchor. Multiplying each tick's
+            // correction by alpha would still converge to the distorted encoder.
+            const float weighted_angle = motor_unwrapped_angle_ + config_.fusion_encoder_weight *
+                (encoder_unwrapped_angle_ - motor_unwrapped_angle_);
+            const float weighted_error = weighted_angle - predicted_angle;
+            if (absolute(weighted_error) > corridor) {
+                predicted_angle += weighted_error - signed_value(corridor, weighted_error);
             }
             snapshot_.fused_angle = predicted_angle;
             snapshot_.encoder_error = encoder_unwrapped_angle_ - predicted_angle;
@@ -100,6 +122,7 @@ public:
     [[nodiscard]] const OutputObserverSnapshot& snapshot() const { return snapshot_; }
 
 private:
+    const EncoderCalibration* calibration_{};
     static constexpr float kTwoPi = 6.28318530718F;
     static float wrap_pi(float value) {
         while (value > 3.14159265359F) value -= kTwoPi;
@@ -109,6 +132,25 @@ private:
     static float absolute(float value) { return value < 0.0F ? -value : value; }
     static float signed_value(float magnitude, float sign_source) {
         return sign_source < 0.0F ? -magnitude : magnitude;
+    }
+    float unwrap_into_calibrated_range(float angle) const {
+        if (!limits_valid_) return angle;
+        float best = angle;
+        float best_distance = distance_to_limits(angle);
+        for (int shift : {1, -1, 2, -2}) {
+            const float candidate = angle + static_cast<float>(shift) * kTwoPi;
+            const float candidate_distance = distance_to_limits(candidate);
+            if (candidate_distance < best_distance) {
+                best = candidate;
+                best_distance = candidate_distance;
+            }
+        }
+        return best;
+    }
+    float distance_to_limits(float angle) const {
+        if (angle < lower_limit_) return lower_limit_ - angle;
+        if (angle > upper_limit_) return angle - upper_limit_;
+        return 0.0F;
     }
     void update_motor_direction(float motor_delta) {
         // One output-encoder tick is large enough to reject FOC estimator
@@ -137,9 +179,13 @@ private:
     float previous_motor_angle_{};
     float motor_alignment_offset_{};
     float encoder_unwrapped_angle_{};
+    float motor_unwrapped_angle_{};
     float motor_motion_accumulator_{};
     std::int8_t motor_direction_{};
     std::uint32_t previous_ms_{};
+    float lower_limit_{};
+    float upper_limit_{};
+    bool limits_valid_{};
 };
 
 }  // namespace ruka3

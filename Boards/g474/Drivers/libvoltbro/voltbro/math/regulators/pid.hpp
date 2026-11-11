@@ -3,6 +3,7 @@
 #include <utility>
 #include <algorithm>
 #include <tuple>
+#include <limits>
 #include "voltbro/utils.hpp"
 
 #ifdef ARM_MATH_CM4
@@ -63,6 +64,12 @@ public:
         integral_error = std::clamp(new_integral, -config.integral_error_lim, config.integral_error_lim);
     }
 
+    void reset() {
+        signal = 0.0F;
+        integral_error = 0.0F;
+        prev_error = 0.0F;
+    }
+
     FORCE_INLINE void update_config(float kp, float ki, float kd) {
         config.kp = kp;
         config.ki = ki;
@@ -77,7 +84,9 @@ public:
         else {
             auto [raw_signal, new_integral_error] = get_raw_signal_and_intergal(error, dt);
             // anti-windup - not updating integral error if the signal is saturated
-            if (raw_signal < config.max_output && raw_signal > config.min_output) {
+            if ((raw_signal <= config.max_output && raw_signal >= config.min_output) ||
+                (raw_signal > config.max_output && config.ki * error < 0.0F) ||
+                (raw_signal < config.min_output && config.ki * error > 0.0F)) {
                 integral_error = new_integral_error;
             }
             signal = std::clamp(raw_signal, config.min_output, config.max_output);
@@ -86,6 +95,8 @@ public:
     }
 
     float regulation(float error, float dt, float lower_limit, float upper_limit, bool zero_in_threshold=false) {
+        lower_limit = std::max(lower_limit, config.min_output);
+        upper_limit = std::min(upper_limit, config.max_output);
         if (zero_in_threshold && config.tolerance != 0.0f && (fabs(error) <= config.tolerance)) {
             signal = 0.0f;
             integral_error = 0.0f;
@@ -93,10 +104,12 @@ public:
         else {
             auto [raw_signal, new_integral_error] = get_raw_signal_and_intergal(error, dt);
             // anti-windup - not updating integral error if the signal is saturated
-            if (raw_signal < upper_limit && raw_signal > lower_limit) {
+            if ((raw_signal <= upper_limit && raw_signal >= lower_limit) ||
+                (raw_signal > upper_limit && config.ki * error < 0.0F) ||
+                (raw_signal < lower_limit && config.ki * error > 0.0F)) {
                 integral_error = new_integral_error;
             }
-            signal = std::clamp(raw_signal, config.min_output, config.max_output);
+            signal = std::clamp(raw_signal, lower_limit, upper_limit);
         }
         return signal;
     }

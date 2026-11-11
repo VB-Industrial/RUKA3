@@ -15,6 +15,10 @@ HAL_StatusTypeDef BLDCController::init() {
         return result;
     }
 
+    // Run the internal CH4 trigger before ADC offset collection. The physical
+    // driver is still disabled, so these 16 kHz scans measure zero-current bias.
+    result = HAL_TIM_PWM_Start(htim, TIM_CHANNEL_4);
+    if (result != HAL_OK) return result;
     inverter.start();
 
     result = HAL_TIM_PWM_Start(htim, TIM_CHANNEL_2); // B-phase
@@ -26,16 +30,26 @@ HAL_StatusTypeDef BLDCController::init() {
         return result;
     }
 
+    __HAL_TIM_MOE_DISABLE(htim);
+
     return HAL_OK;
 }
 
 HAL_StatusTypeDef BLDCController::stop() {
+    __HAL_TIM_MOE_DISABLE(htim);
+    set_voltage_point(0.0F);
+    DQs[0] = DQs[1] = DQs[2] = 0U;
+    set_pwm();
     drive_info.en_pin.reset();
     _is_on = false;
     return HAL_OK;
 }
 
 HAL_StatusTypeDef BLDCController::start() {
+    __HAL_TIM_MOE_DISABLE(htim);
+    set_voltage_point(0.0F);
+    DQs[0] = DQs[1] = DQs[2] = 0U;
+    set_pwm();
     for (int i = 0; i < 3; i++) {
         drive_info.en_pin.reset();
         HAL_Delay(10);
@@ -45,6 +59,7 @@ HAL_StatusTypeDef BLDCController::start() {
     drive_info.en_pin.set();
     quit_stall();
     _is_on = true;
+    __HAL_TIM_MOE_ENABLE(htim);
     return HAL_OK;
 }
 

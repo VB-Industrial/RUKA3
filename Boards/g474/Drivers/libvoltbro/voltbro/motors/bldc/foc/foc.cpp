@@ -38,12 +38,8 @@ static volatile KalmanProfile kalman_profile;
 #endif
 
 #if defined(MONITOR)
-volatile float I_D = 0;
-volatile float I_Q = 0;
-volatile float V_d = 0;
-volatile float V_q = 0;
 volatile float i_q_error, i_d_error;
-float d_response, q_response, i_q_set;
+float d_response, q_response;
 volatile float control_error_glob = 0;
 volatile float controller_response_glob = 0;
 volatile float value_foc_p = 0;
@@ -180,11 +176,13 @@ void FOC::update_gear_angle() {
         // has to be moved into that same frame before angle reconstruction.
         zero_ticks = cpr - zero_ticks;
     }
-    const float raw_angle = voltbro::foc::gear_angle_from_ticks(
-        current_ticks,
-        zero_ticks,
-        cpr
-    );
+    const auto* calibration = fusion_config.output_calibration;
+    const std::uint16_t physical_raw = fusion_config.gear_angle_sign < 0 ? cpr - current_ticks : current_ticks;
+    std::int32_t corrected{};
+    const float raw_angle = calibration != nullptr && calibration->calibrated_position_ticks(physical_raw, corrected) ?
+        voltbro::foc::wrap_pi(fusion_config.gear_angle_sign * voltbro::foc::kTwoPi * corrected / (cpr + 1)) :
+        voltbro::foc::gear_angle_from_ticks(current_ticks, zero_ticks, cpr);
+    gear_measurement_angle = raw_angle;
 
     float predicted_angle = raw_angle;
     float predicted_velocity = 0.0f;
@@ -291,10 +289,6 @@ void FOC::update() {
     elec_angles.c = (float32_t)elec_angles_q31.cosOutput / 2147483648.0f;  // convert to float from q31
     elec_angles.s = (float32_t)elec_angles_q31.sinOutput / 2147483648.0f;  // convert to float from q31
 
-    #ifndef MONITOR
-    float V_d, V_q;
-    static float I_D = 0;
-    #endif
     #ifdef FOC_PROFILE
     t_start = DWT->CYCCNT;
     #endif
@@ -318,7 +312,23 @@ void FOC::update() {
     monitor_motor_point_type = static_cast<int>(point_type);
 #endif
 
-    shaft_torque = I_Q * drive_info.torque_const * gear_ratio_f;
+    shaft_torque = drive_info.current_direction * I_Q * drive_info.torque_const * gear_ratio_f;
+
+    // Keep measuring while disarmed, but never integrate errors or write PWM.
+    if (!is_on()) return;
+    if (!(busV > 0.0F)) {
+        current_fault = CurrentLoopFault::invalid_bus_voltage;
+        stop();
+        return;
+    }
+    if (std::fabs(inverter.get_A()) > drive_info.phase_current_trip_a ||
+        std::fabs(inverter.get_B()) > drive_info.phase_current_trip_a ||
+        std::fabs(inverter.get_C()) > drive_info.phase_current_trip_a) {
+        current_fault = CurrentLoopFault::phase_overcurrent;
+        stop();
+        return;
+    }
+    const float available_voltage = std::min(voltage_limit, busV * drive_info.modulation_voltage_ratio);
 
     if (point_type == SetPointType::VOLTAGE) {
         V_d = 0;
@@ -326,12 +336,12 @@ void FOC::update() {
     }
     else {
         #ifndef MONITOR
-        float i_d_error, i_q_error, d_response, q_response, i_q_set;
+        float i_d_error, i_q_error, d_response, q_response;
         #endif
 
         i_d_error = -I_D;
-        d_response = d_reg.regulation(i_d_error, T, busV);
-        V_d = std::clamp(d_response, -busV, busV);
+        d_response = d_reg.regulation(i_d_error, T, available_voltage);
+        V_d = d_response;
 
         i_q_set = 0.0f;
         #ifdef FOC_PROFILE
@@ -345,11 +355,16 @@ void FOC::update() {
             value_foc_v_kp = foc_target.velocity_kp;
             value_foc_t = foc_target.torque;
             #endif
+            // Adapter already converted P/D to motor-side gains, as in VBDrive.
+            // Feed-forward torque retains output-shaft units.
             i_q_set = 1.0f / drive_info.torque_const * (
-                foc_target.angle_kp * (foc_target.angle - get_angle()) +
-                foc_target.velocity_kp * (foc_target.velocity - get_velocity()) +
-                (foc_target.torque / gear_ratio_f)
+                foc_target.angle_kp * std::remainder(foc_target.angle - get_fusion_angle(), pi2) +
+                foc_target.velocity_kp * (foc_target.velocity - get_fusion_velocity()) +
+                foc_target.torque / gear_ratio_f
             );
+        }
+        else if (point_type == SetPointType::CURRENT) {
+            i_q_set = target;
         }
         else if (point_type == SetPointType::TORQUE) {
             i_q_set = target / drive_info.torque_const / gear_ratio_f;
@@ -381,12 +396,17 @@ void FOC::update() {
             i_q_set = copysign(drive_limits.current_limit, i_q_set);
         }
         // absolute limit on currents defined by the hardware safe operation region
-        if (fabs(i_q_set) > 30.0f) {
-            i_q_set = copysign(30.0f, i_q_set);
+        if (fabs(i_q_set) > drive_info.max_current) {
+            i_q_set = copysign(drive_info.max_current, i_q_set);
         }
 
+        i_q_set *= drive_info.current_direction;
+
         i_q_error = i_q_set - I_Q;
-        q_response = q_reg.regulation(i_q_error, T, busV);
+        // Give Id priority and keep the voltage vector inside the SVM circle.
+        const float q_voltage_limit = std::sqrt(std::max(0.0F,
+            available_voltage * available_voltage - V_d * V_d));
+        q_response = q_reg.regulation(i_q_error, T, q_voltage_limit);
         V_q = q_response;
         #ifdef FOC_PROFILE
         foc_profile.outer_loop = DWT->CYCCNT - t_start;
@@ -396,11 +416,11 @@ void FOC::update() {
     #if defined(MONITOR)
     float V_d_local = V_d;
     float V_q_local = V_q;
-    limit_norm(&V_d_local, &V_q_local, busV);
+    limit_norm(&V_d_local, &V_q_local, available_voltage);
     V_d = V_d_local;
     V_q = V_q_local;
     #else
-    limit_norm(&V_d, &V_q, busV);
+    limit_norm(&V_d, &V_q, available_voltage);
     #endif
 
     #ifdef FOC_PROFILE

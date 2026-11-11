@@ -14,10 +14,12 @@ void MX_FDCAN1_Init(void) {
     hfdcan1.Init.NominalSyncJumpWidth = 1U;
     hfdcan1.Init.NominalTimeSeg1 = 29U;
     hfdcan1.Init.NominalTimeSeg2 = 10U;
-    hfdcan1.Init.DataPrescaler = 4U;
-    hfdcan1.Init.DataSyncJumpWidth = 1U;
-    hfdcan1.Init.DataTimeSeg1 = 2U;
-    hfdcan1.Init.DataTimeSeg2 = 2U;
+    /* PLLQ = 160 MHz: 160 MHz / (2 * (1 + 15 + 4)) = 4 Mbit/s.
+       Sample point = 16/20 = 80%; SJW = 4 * 12.5 ns = 50 ns. */
+    hfdcan1.Init.DataPrescaler = 2U;
+    hfdcan1.Init.DataSyncJumpWidth = 4U;
+    hfdcan1.Init.DataTimeSeg1 = 15U;
+    hfdcan1.Init.DataTimeSeg2 = 4U;
     hfdcan1.Init.StdFiltersNbr = 0U;
     hfdcan1.Init.ExtFiltersNbr = 8U;
     hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;

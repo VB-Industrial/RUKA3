@@ -1,6 +1,14 @@
 #pragma once
 
+// C-compatible board timing constants consumed by CubeMX TIM initialization.
+#define RUKA3_G474_PWM_PRESCALER 4U
+#define RUKA3_G474_PWM_TICKS 2000U
+#define RUKA3_G474_MAX_PWM_TICKS 1700U
+#define RUKA3_G474_CURRENT_SAMPLE_TICKS 1800U
+
+#ifdef __cplusplus
 #include <cstdint>
+#include "phase_current_sense.hpp"
 
 namespace ruka3 {
 
@@ -20,6 +28,7 @@ struct MotorProfile {
     float control_period_s;
     float torque_const;
     float current_limit;
+    float nominal_current;
     float torque_limit;
     float max_voltage;
     float stall_current;
@@ -53,6 +62,8 @@ struct SafetyProfile {
 
 struct CommandTuning {
     float default_position_kp;
+    float default_position_ki = 0.0F; // A / (rad*s), slow load compensation.
+    float default_integral_current_limit_a = 3.0F;
     float default_velocity_kp;
     float default_torque_kp;
     float acquire_threshold_rad;
@@ -65,6 +76,8 @@ struct CommandTuning {
     float service_position_velocity_rad_s;
     float service_position_acceleration_rad_s2;
     std::uint16_t service_position_update_hz;
+    float calibration_current_limit_a = 0.4F;
+    float calibration_velocity_gain_a = 0.8F;
 };
 
 struct ObserverProfile {
@@ -72,8 +85,9 @@ struct ObserverProfile {
     float output_velocity_lpf;
     std::uint8_t fusion_encoder_corridor_ticks;
     // Measured output-side free play.  It is diagnostic information, not a
-    // coordinate correction: the absolute output encoder remains the truth.
+    // coordinate correction.
     float expected_backlash_rad;
+    float fusion_encoder_weight = 1.0F; // Absolute correction relative to the motor anchor, not per-tick alpha.
 };
 
 struct CommunicationProfile {
@@ -113,27 +127,10 @@ inline constexpr SafetyProfile kDefaultSafetyProfile{
 };
 
 inline constexpr CommandTuning kDefaultCommandTuning{
-    .default_position_kp = 0.5F,
-    .default_velocity_kp = 0.02F,
-    .default_torque_kp = 0.5F,
-    .acquire_threshold_rad = 0.5F,
-    .acquire_voltage = 0.6F,
-    .track_max_voltage = 11.5F,
-    .max_velocity_feedback_gain = 1.5F,
-    .register_position_kp = 0.002F,
-    .register_position_max_voltage = 1.2F,
-    .register_position_deadband_ticks = 8,
-    .service_position_velocity_rad_s = 0.5F,
-    .service_position_acceleration_rad_s2 = 1.0F,
-    .service_position_update_hz = 100U,
-};
-// J5/J6 have been validated at this position stiffness.  A velocity term made
-// the compact joints vibrate, so service position hold keeps it at zero.
-inline constexpr CommandTuning kG431CommandTuning{
-    .default_position_kp = 20.0F,
+    .default_position_kp = 5.0F,
     .default_velocity_kp = 0.0F,
     .default_torque_kp = 0.5F,
-    .acquire_threshold_rad = 0.5F,
+    .acquire_threshold_rad = 0.1F,
     .acquire_voltage = 0.6F,
     .track_max_voltage = 11.5F,
     .max_velocity_feedback_gain = 1.5F,
@@ -143,8 +140,38 @@ inline constexpr CommandTuning kG431CommandTuning{
     .service_position_velocity_rad_s = 0.5F,
     .service_position_acceleration_rad_s2 = 1.0F,
     .service_position_update_hz = 100U,
+    .calibration_current_limit_a = 1.0F,
+    .calibration_velocity_gain_a = 2.0F,
 };
+// J4 retains its smaller integral-current limit; position gains are common.
+inline constexpr CommandTuning kJ4CommandTuning = [] {
+    auto tuning = kDefaultCommandTuning;
+    tuning.default_integral_current_limit_a = 1.0F;
+    return tuning;
+}();
+// Common public Kp/Kd for both boards; adapters convert them to motor-side
+// gains by dividing by gear_ratio. G431 keeps its own calibration-current limits.
+inline constexpr CommandTuning kG431CommandTuning = [] {
+    auto tuning = kDefaultCommandTuning;
+    tuning.default_integral_current_limit_a = 2.0F;
+    tuning.calibration_current_limit_a = 0.4F;
+    tuning.calibration_velocity_gain_a = 0.8F;
+    return tuning;
+}();
 inline constexpr ObserverProfile kDefaultObserverProfile{65536U, 0.1F, 2U, 0.0F};
+inline constexpr ObserverProfile kG474ObserverProfile{16384U, 0.1F, 2U, 0.0F};
+inline constexpr ObserverProfile kJ4ObserverProfile = [] {
+    auto observer = kG474ObserverProfile;
+    observer.fusion_encoder_weight = 0.1F;
+    return observer;
+}();
+inline constexpr float kCalibrationMaxVelocityRadS = 0.5F;
+inline constexpr float kCalibrationCurrentSlewAS = 1.0F;
+inline constexpr float kCalibrationSafeMarginRad = 0.08F;
+constexpr std::uint16_t calibration_margin_ticks(std::uint32_t cpr) {
+    return static_cast<std::uint16_t>(cpr * kCalibrationSafeMarginRad / 6.28318530718F);
+}
+inline constexpr std::uint32_t kCalibrationReferenceTicksPerTurn = 65536U;
 inline constexpr CommunicationProfile kDefaultCommunicationProfile{
     .feedback_update_hz = 100U,
     .temperature_update_hz = 10U,
@@ -155,9 +182,11 @@ inline constexpr CommunicationProfile kDefaultCommunicationProfile{
 inline constexpr ObserverProfile kJ6ObserverProfile{65536U, 0.1F, 2U, 0.006F};
 
 inline constexpr MotorProfile kG474MotorProfile{
-    .control_period_s = 0.00005F, .torque_const = 0.011F,
-    .current_limit = 22.0F, .torque_limit = 10.0F, .max_voltage = 50.0F,
-    .stall_current = 22.0F, .stall_timeout_s = 3.0F, .stall_tolerance = 0.2F,
+    // TIM1: 160 MHz / ((PSC=4)+1) / ((ARR=1999)+1) = 16 kHz.
+    .control_period_s = 0.0000625F, .torque_const = 0.011F,
+    // User-selected provisional limits for J1-J4; not verified nameplate ratings.
+    .current_limit = 22.0F, .nominal_current = 3.0F, .torque_limit = 10.0F, .max_voltage = 50.0F,
+    .stall_current = 3.0F, .stall_timeout_s = 3.0F, .stall_tolerance = 0.2F,
     .calibration_voltage = 1.0F, .current_pid_kp = 2.0F, .current_pid_ki = 600.0F,
     .current_pid_kd = 0.0F, .filter_expected_a = 0.0F,
     .filter_g1 = 0.015700989410003974F, .filter_g2 = 3.925227776360174F,
@@ -165,12 +194,32 @@ inline constexpr MotorProfile kG474MotorProfile{
     .pole_pairs = 14,
 };
 
+// ADC now acquires one externally triggered four-rank scan per PWM period.
+// Preserve the original 45 mV/A equivalent sensor sensitivity.
+inline constexpr PhaseCurrentSense kG474CurrentSense{
+    3.3F, 4096.0F, 1.0F, 0.045F, 16.0F, {1, 1, 1}, 64U,
+};
+// At this vector/bus ratio, SVM's highest duty is <= 0.8465, leaving all
+// three PWM phases low before the sample trigger at 90% of the period.
+inline constexpr float kG474ModulationVoltageRatio = 0.4F;
+// Active current-loop ceiling follows the selected nominal motor current.
+// These limits apply to ALL command paths, including normal CAN servo commands.
+inline constexpr float kG474CommissioningCurrentLimitA = kG474MotorProfile.nominal_current;
+inline constexpr float kG474CommissioningVoltageLimitV = 2.0F;
+inline constexpr float kG474PhaseOvercurrentTripA = kG474MotorProfile.current_limit;
+static_assert(kG474CommissioningCurrentLimitA > 0.0F &&
+              kG474CommissioningCurrentLimitA <= kG474MotorProfile.current_limit);
+static_assert(kG474CommissioningVoltageLimitV > 0.0F &&
+              kG474CommissioningVoltageLimitV <= kG474MotorProfile.max_voltage);
+static_assert(kG474PhaseOvercurrentTripA > kG474CommissioningCurrentLimitA &&
+              kG474PhaseOvercurrentTripA <= kG474MotorProfile.current_limit);
+
 // J5/J6 preserve the presently commissioned 2 A limit.  The remaining values
 // are the prior VBDrive defaults, now fixed in the robot profile rather than
 // read from EEPROM.
 inline constexpr MotorProfile kG431MotorProfile{
     .control_period_s = 0.000025F, .torque_const = 1.0F,
-    .current_limit = 2.0F, .torque_limit = 30.0F, .max_voltage = 50.0F,
+    .current_limit = 2.0F, .nominal_current = 2.0F, .torque_limit = 30.0F, .max_voltage = 50.0F,
     .stall_current = 6.0F, .stall_timeout_s = 3.0F, .stall_tolerance = 0.2F,
     .calibration_voltage = 0.2F, .current_pid_kp = 4.0F, .current_pid_ki = 1600.0F,
     .current_pid_kd = 0.0F, .filter_expected_a = 0.0F,
@@ -182,10 +231,10 @@ inline constexpr MotorProfile kG431MotorProfile{
 // This table is the only CAN identity authority for all six joints.
 // Calibration offsets remain in the board-specific persistent record.
 inline constexpr JointProfile kJointProfiles[] = {
-    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
-    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
-    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
-    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
+    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
+    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
+    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
+    {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kJ4CommandTuning, kJ4ObserverProfile, kDefaultCommunicationProfile},
     {5, Board::g431, 105, 1001, 1125, 1135, 10.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
     {6, Board::g431, 106, 1001, 1126, 1136, 10.0F,  1,  1,  1,    0, 52076, -1, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kJ6ObserverProfile, kDefaultCommunicationProfile},
 };
@@ -194,6 +243,7 @@ constexpr bool motor_profile_is_valid(const MotorProfile& profile) {
     return profile.control_period_s > 0.0F &&
            profile.torque_const > 0.0F &&
            profile.current_limit > 0.0F &&
+           profile.nominal_current > 0.0F && profile.nominal_current <= profile.current_limit &&
            profile.torque_limit > 0.0F &&
            profile.max_voltage > 0.0F &&
            profile.stall_current > 0.0F &&
@@ -205,10 +255,22 @@ constexpr bool joint_profiles_are_valid() {
     for (const auto& profile : kJointProfiles) {
         if (profile.index == 0U || profile.node_id == 0U || profile.gear_ratio <= 0.0F ||
             profile.speed_limit < 0.0F ||
+            !(profile.observer.fusion_encoder_weight >= 0 && profile.observer.fusion_encoder_weight <= 1) ||
             profile.communication.feedback_update_hz == 0U ||
             profile.communication.feedback_update_hz > 1000U ||
             profile.communication.temperature_update_hz == 0U ||
             profile.communication.temperature_update_hz > 1000U ||
+            !(profile.command.calibration_current_limit_a > 0) ||
+            profile.command.calibration_current_limit_a > profile.motor.nominal_current ||
+            !(profile.command.calibration_velocity_gain_a > 0) ||
+            !(profile.command.default_position_ki >= 0) ||
+            !(profile.command.default_integral_current_limit_a >= 0) ||
+            profile.command.default_integral_current_limit_a > profile.motor.stall_current ||
+            profile.command.default_integral_current_limit_a > profile.motor.nominal_current ||
+            profile.command.service_position_velocity_rad_s <= 0 ||
+            profile.command.service_position_acceleration_rad_s2 <= 0 ||
+            profile.command.service_position_update_hz == 0 ||
+            profile.command.service_position_update_hz > 1000U ||
             (profile.position_direction != -1 && profile.position_direction != 1) ||
             !motor_profile_is_valid(profile.motor)) {
             return false;
@@ -224,3 +286,4 @@ constexpr const JointProfile& joint_profile(const std::uint8_t index) {
 }
 
 }  // namespace ruka3
+#endif // __cplusplus

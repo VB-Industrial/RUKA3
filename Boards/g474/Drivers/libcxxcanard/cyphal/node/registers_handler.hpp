@@ -79,6 +79,9 @@ public:
         bool is_found = false;
         for (auto& register_def : registers) {
             auto& register_name = std::get<std::string>(register_def);
+            // Names arrive from the network: do not accept prefixes or read
+            // beyond the stored name when the request contains a longer name.
+            if (register_name.size() != register_access_request.name.name.count) continue;
             if(memcmp(
                 register_name.c_str(),
                 register_access_request.name.name.elements,

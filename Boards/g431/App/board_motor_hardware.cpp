@@ -7,7 +7,7 @@ namespace ruka3::g431 {
 void BoardMotorHardware::force_safe() {
     if (auto* motor = get_motor()) {
         motor->set_foc_point(FOCTarget{0});
-        motor->set_state(false);
+        (void)motor->set_bridge_outputs_enabled(false);
     }
 }
 

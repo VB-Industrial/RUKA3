@@ -17,6 +17,7 @@ void setup_cordic();
 void setup_timers();
 
 void setup_can();
+void setup_motor_control();
 void setup_cyphal_comms();
 void heartbeat();
 std::shared_ptr<CyphalInterface>& get_interface();
@@ -24,3 +25,4 @@ std::shared_ptr<CyphalInterface>& get_interface();
 void comms_loop(millis);
 FOC& get_motor();
 GenericEncoder& get_gear_encoder();
+const EncoderCalibration& get_output_calibration_core();

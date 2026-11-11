@@ -1,5 +1,10 @@
 # RUKA3: plan of the unified BLDC firmware
 
+G474 current-loop commissioning implementation and its remaining hardware checks
+are documented in [g474-current-control.md](g474-current-control.md). J4 now runs
+the current-control image and has passed initial short low-current tests;
+J1–J3 retain their CAN-only images.
+
 ## Hardware mapping
 
 | Joints | MCU | Firmware baseline | Role |
@@ -86,3 +91,11 @@ before using the VS Code task; for example, `uv tool install nunavut==2.3.1`.
 VBBoot uses the default command CAN ID `0x444`, so first CAN programming must
 be done one controller at a time until per-node bootloader configuration is
 added.
+
+## Общая прикладная логика G431/G474
+
+ServiceMotion (трапеция, hold, поток, прямой ток/вольтаж), observer и лимиты объединены; J4/J5/J6 прошиты, J4 проверен движениями, J5/J6 — без включения PWM. Остальные образы собраны. Подробности и аппаратные различия: [shared-motion.md](shared-motion.md).
+
+## Единый потоковый контракт G431/G474
+
+Единые command.1.0 на subjects 1121–1126 и масштаб Kp/Kd выходного момента реализованы и прошиты на J4/J5/J6. G431 переведён с MIT/SpecificControl; 17 тестов и сборки всех звеньев прошли. Текущее состояние развёртывания и миграция клиентов: [g431-g474-sync.md](g431-g474-sync.md).

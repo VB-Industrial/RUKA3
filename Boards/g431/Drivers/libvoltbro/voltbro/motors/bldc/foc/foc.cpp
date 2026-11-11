@@ -61,7 +61,7 @@ void FOC::update_angle() {
     raw_value = encoder.get_value();
     int offset_value = (int)raw_value - encoder.electric_offset;
     if (lookup_table != nullptr) {
-        offset_value -= (*lookup_table)[raw_value >> 3];
+        offset_value -= (*lookup_table)[motor_calibration::lut_index(raw_value)];
     }
     static const float cpr_offset = (float)encoder.CPR / (2.0f * drive_info.common.ppairs);
     offset_value -= cpr_offset;

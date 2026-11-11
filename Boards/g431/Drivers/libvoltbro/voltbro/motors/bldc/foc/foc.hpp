@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "../bldc.h"
+#include "calibration_geometry.hpp"
 #include "voltbro/math/regulators/pid.hpp"
 
 #define USE_CALIBRATION_ARRAY
@@ -86,7 +87,7 @@ protected:
 
     void set_windings_calibration(float current_angle);
 public:
-    virtual void calibrate(CalibrationData& calibration_data, std::byte* additional_buffer, size_t buffer_size);
+    virtual bool calibrate(CalibrationData& calibration_data, std::byte* additional_buffer, size_t buffer_size);
     void apply_calibration(CalibrationData& calibration_data) {
         // Replace config parameters with the ones loaded from EEPROM
         // Very ugly hack, but it will work for now
@@ -124,6 +125,9 @@ public:
         q_reg(std::move(q_config)),
         d_reg(std::move(d_config))
         {}
+
+    // Corrected rotor angle (offset/LUT applied), before the native observer.
+    float get_preobserver_rotor_angle() const { return raw_elec_angle; }
 
     float get_electric_angle() {
         return elec_angle;

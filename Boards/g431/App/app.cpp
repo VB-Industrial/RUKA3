@@ -27,8 +27,7 @@
 #include <uavcan/si/unit/angle/Scalar_1_0.hpp>
 #include <uavcan/si/unit/torque/Scalar_1_0.hpp>
 #include <uavcan/si/unit/voltage/Scalar_1_0.hpp>
-#include <voltbro/foc/MIT_1_0.hpp>
-#include <voltbro/foc/specific_control_1_0.hpp>
+#include <voltbro/foc/command_1_0.hpp>
 #include <voltbro/foc/state_simple_1_0.hpp>
 
 #include <voltbro/eeprom/eeprom.hpp>
@@ -39,7 +38,10 @@
 #include "joint_controller.hpp"
 #include "output_state_observer.hpp"
 #include "parameters.hpp"
+#include "calibration_service.hpp"
+#include "joint_register_codec.hpp"
 #include "protocol.h"
+std::uint32_t joint_uptime_ms() { return millis_32(); }
 //#pragma endregion
 
 //#pragma region ExternConfiguration
@@ -107,13 +109,18 @@ static ruka3::OutputStateObserver output_observer({
     ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.output_velocity_lpf,
     ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.fusion_encoder_corridor_ticks,
     ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.expected_backlash_rad,
+    ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.fusion_encoder_weight,
 });
 static ruka3::MechanicalCalibration mechanical_calibration(
-    eeprom,
+    RUKA3_JOINT_INDEX,
     ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.output_encoder_cpr,
     static_cast<std::int8_t>(ruka3::joint_profile(RUKA3_JOINT_INDEX).output_encoder_sign *
-                             ruka3::joint_profile(RUKA3_JOINT_INDEX).position_direction));
-static ruka3::ServiceMotionSnapshot service_motion;
+                             ruka3::joint_profile(RUKA3_JOINT_INDEX).position_direction),
+    ruka3::kCalibrationReferenceTicksPerTurn,
+    ruka3::calibration_margin_ticks(ruka3::joint_profile(RUKA3_JOINT_INDEX).observer.output_encoder_cpr));
+static ruka3::ServiceMotion service_controller{ruka3::joint_profile(RUKA3_JOINT_INDEX).command,
+    std::min(ruka3::joint_profile(RUKA3_JOINT_INDEX).motor.stall_current, ruka3::joint_profile(RUKA3_JOINT_INDEX).motor.nominal_current)};
+static const auto& service_motion = service_controller.snapshot();
 VBDrive* get_motor() {
     return motor;
 }
@@ -137,56 +144,47 @@ const ruka3::MechanicalCalibrationSnapshot& get_mechanical_calibration_snapshot(
     return mechanical_calibration.snapshot();
 }
 const ruka3::ServiceMotionSnapshot& get_service_motion_snapshot() { return service_motion; }
+ruka3::ServiceMotion& joint_motion_instance() { return service_controller; }
+ruka3::JointCalibration& joint_calibration_instance() { return mechanical_calibration; }
+std::uint16_t calibration_board_raw() { return motor->get_shaft_encoder_value(); }
+float calibration_board_angle() { return kPositionDirection * motor->get_angle(); }
+float calibration_board_velocity() { return kPositionDirection * motor->get_velocity(); }
+bool calibration_board_available() {
+    return motor && motor_calibration_valid && !motor_calibration_pending && fault_manager.snapshot().latched == 0;
+}
+bool calibration_board_enable() {
+    service_cancel();
+    motor->set_voltage_point(0.0F);
+    return motor->set_bridge_outputs_enabled(true) == HAL_OK;
+}
+void calibration_board_disable() {
+    service_cancel();
+    if (motor) { motor->set_foc_point(FOCTarget{0}); (void)motor->set_bridge_outputs_enabled(false); }
+    joint_controller.disarm();
+}
+void calibration_board_current(float current) {
+    constexpr auto& profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
+    motor->set_foc_point(FOCTarget{.torque = kPositionDirection * current * profile.motor.torque_const * profile.gear_ratio});
+}
+void calibration_board_sync() {
+    mechanical_calibration.refresh();
+    output_observer.set_encoder_zero(mechanical_calibration.snapshot().encoder_zero);
+    const auto& limits = mechanical_calibration.snapshot();
+    if (limits.limits_valid) output_observer.set_calibrated_limits(limits.lower_limit, limits.upper_limit);
+}
 static void update_fault_manager();
 static void update_service_motion();
 
 static float output_outward_command_scale(float command) {
-    const auto& limits = mechanical_calibration.snapshot();
-    const auto& output = output_observer.snapshot();
-    if (!limits.limits_valid || !output.initialized) return 0.0F;
-    if (command > 0.0F) {
-        if (output.fused_angle >= limits.upper_limit) return 0.0F;
-        if (output.fused_angle > limits.soft_upper_limit) {
-            return std::fmax(0.0F, (limits.upper_limit - output.fused_angle) /
-                (limits.upper_limit - limits.soft_upper_limit));
-        }
-    } else if (command < 0.0F) {
-        if (output.fused_angle <= limits.lower_limit) return 0.0F;
-        if (output.fused_angle < limits.soft_lower_limit) {
-            return std::fmax(0.0F, (output.fused_angle - limits.lower_limit) /
-                (limits.soft_lower_limit - limits.lower_limit));
-        }
-    }
-    return 1.0F;
+    return ruka3::outward_command_scale(command, output_observer.snapshot().fused_angle,
+                                       mechanical_calibration.snapshot());
 }
-
 static float limit_output_directional_command(float command) {
     return command * output_outward_command_scale(command);
 }
 
-static float limit_direct_voltage(float voltage) {
-    constexpr auto& profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
-    return voltage * output_outward_command_scale(
-        kPositionDirection * static_cast<float>(profile.motor_command_sign) * voltage);
-}
-
-static float output_soft_limited_target(float target) {
-    const auto& limits = mechanical_calibration.snapshot();
-    const float position = output_observer.snapshot().fused_angle;
-    // A soft limit is a one-way gate, not a prohibited target range.  A
-    // command may enter it; once already inside, only a command back towards
-    // the working range may change the position target.
-    if (position > limits.soft_upper_limit && target > position) {
-        return position;
-    }
-    if (position < limits.soft_lower_limit && target < position) {
-        return position;
-    }
-    return target;
-}
-
 void service_cancel() {
-    service_motion = {};
+    service_controller.cancel();
 }
 
 bool service_set_zero() {
@@ -197,6 +195,10 @@ bool service_set_zero() {
     set_motor_enabled(false);
     if (!mechanical_calibration.set_zero(static_cast<uint16_t>(motor->get_shaft_encoder_value()))) return false;
     output_observer.set_encoder_zero(mechanical_calibration.snapshot().encoder_zero);
+    if (mechanical_calibration.snapshot().limits_valid) {
+        output_observer.set_calibrated_limits(mechanical_calibration.snapshot().lower_limit,
+                                              mechanical_calibration.snapshot().upper_limit);
+    }
     output_observer.update(millis_32(), motor->get_shaft_encoder_value(),
                            kPositionDirection * motor->get_angle());
     return true;
@@ -205,100 +207,99 @@ bool service_set_zero() {
 bool service_set_limit(uint32_t stage) {
     if (!motor || joint_controller.accepts_motor_commands() ||
         get_fault_snapshot().level == ruka3::FaultLevel::fault) return false;
-    return mechanical_calibration.set_limit(stage, static_cast<uint16_t>(motor->get_shaft_encoder_value()));
+    const bool saved = mechanical_calibration.set_limit(stage,
+        static_cast<uint16_t>(motor->get_shaft_encoder_value()));
+    if (saved && stage == 3U && mechanical_calibration.snapshot().limits_valid) {
+        output_observer.set_calibrated_limits(mechanical_calibration.snapshot().lower_limit,
+                                              mechanical_calibration.snapshot().upper_limit);
+    }
+    return saved;
 }
 
 bool service_set_voltage(float voltage) {
-    if (!motor || !mechanical_calibration.snapshot().limits_valid || !std::isfinite(voltage) || !joint_controller.accepts_motor_commands() ||
-        std::fabs(voltage) > ruka3::joint_profile(RUKA3_JOINT_INDEX).motor.max_voltage) return false;
-    if (voltage == 0.0F) {
-        service_cancel();
-        return motor->set_voltage_point(0.0F);
-    }
-    service_motion.mode = ruka3::ServiceMotionMode::voltage;
-    service_motion.target = voltage;
-    service_motion.error = 0.0F;
-    return true;
+    const auto now = millis_32();
+    if (!motor || !joint_controller.accepts_motor_commands() ||
+        !service_controller.direct(ruka3::ServiceMotionMode::voltage, voltage,
+            ruka3::joint_profile(RUKA3_JOINT_INDEX).motor.max_voltage, mechanical_calibration.snapshot(), now)) return false;
+    command_supervisor.note_accepted_command(now);
+    update_service_motion();
+    return service_motion.mode == ruka3::ServiceMotionMode::voltage;
+}
+
+bool service_set_current(float current) {
+    const auto now = millis_32();
+    if (!motor || !joint_controller.accepts_motor_commands() ||
+        !service_controller.direct(ruka3::ServiceMotionMode::current, current,
+            ruka3::joint_profile(RUKA3_JOINT_INDEX).motor.current_limit, mechanical_calibration.snapshot(), now)) return false;
+    command_supervisor.note_accepted_command(now);
+    update_service_motion();
+    return service_motion.mode == ruka3::ServiceMotionMode::current;
 }
 
 bool service_set_position(float position) {
-    const auto& limits = mechanical_calibration.snapshot();
-    if (!motor || !std::isfinite(position) || !joint_controller.accepts_motor_commands() ||
-        !limits.limits_valid || !output_observer.snapshot().initialized ||
-        position < limits.lower_limit || position > limits.upper_limit) return false;
-    const float start = output_observer.snapshot().fused_angle;
-    const float delta = position - start;
-    const float distance = std::fabs(delta);
-    const auto& tuning = ruka3::joint_profile(RUKA3_JOINT_INDEX).command;
-    const float max_velocity = tuning.service_position_velocity_rad_s;
-    const float acceleration = tuning.service_position_acceleration_rad_s2;
-    const std::uint16_t update_hz = tuning.service_position_update_hz;
-    if (max_velocity <= 0.0F || acceleration <= 0.0F || update_hz == 0U || update_hz > 1000U) return false;
-
-    const float full_acceleration_distance = max_velocity * max_velocity / acceleration;
-    const bool triangular = distance <= full_acceleration_distance;
-    const float peak_velocity = triangular ? std::sqrt(distance * acceleration) : max_velocity;
-    const float acceleration_time = peak_velocity / acceleration;
-    const float cruise_time = triangular ? 0.0F : (distance - full_acceleration_distance) / max_velocity;
-    const float total_time = acceleration_time * 2.0F + cruise_time;
-    const std::uint32_t started_ms = millis_32();
-
-    service_motion.mode = ruka3::ServiceMotionMode::position;
-    while (true) {
-        const float elapsed = static_cast<float>(millis_32() - started_ms) / 1000.0F;
-        if (elapsed >= total_time) break;
-        float travelled = 0.0F;
-        if (elapsed < acceleration_time) {
-            travelled = 0.5F * acceleration * elapsed * elapsed;
-        } else if (elapsed < acceleration_time + cruise_time) {
-            travelled = 0.5F * acceleration * acceleration_time * acceleration_time +
-                peak_velocity * (elapsed - acceleration_time);
-        } else {
-            const float braking_time = total_time - elapsed;
-            travelled = distance - 0.5F * acceleration * braking_time * braking_time;
-        }
-        service_motion.target = start + std::copysign(travelled, delta);
-        output_observer.update(millis_32(), motor->get_shaft_encoder_value(),
-                               kPositionDirection * motor->get_angle());
-        can_fault_monitor.poll();
-        update_fault_manager();
-        update_service_motion();
-        if (service_motion.mode != ruka3::ServiceMotionMode::position ||
-            !joint_controller.accepts_motor_commands()) return false;
-        HAL_Delay(1000U / update_hz);
-    }
-    service_motion.target = position;
-    output_observer.update(millis_32(), motor->get_shaft_encoder_value(),
-                           kPositionDirection * motor->get_angle());
+    const auto now = millis_32();
+    if (!motor || !joint_controller.accepts_motor_commands() || !output_observer.snapshot().initialized ||
+        !service_controller.position(position, output_observer.snapshot().fused_angle,
+                                      mechanical_calibration.snapshot(), now)) return false;
+    command_supervisor.note_accepted_command(now);
     update_service_motion();
     return service_motion.mode == ruka3::ServiceMotionMode::position;
 }
 
+bool service_set_servo(float position, float velocity, float torque, float kp, float kd) {
+    const auto now = millis_32();
+    if (!motor || !joint_controller.accepts_motor_commands() || !output_observer.snapshot().initialized ||
+        !service_controller.servo(position, velocity, torque, kp, kd, output_observer.snapshot().fused_angle,
+                                  mechanical_calibration.snapshot(), now)) return false;
+    command_supervisor.note_accepted_command(now);
+    update_service_motion();
+    return service_motion.mode == ruka3::ServiceMotionMode::servo;
+}
+
+void service_hold() {
+    service_controller.hold(output_observer.snapshot().fused_angle, millis_32());
+    update_service_motion();
+}
+
 static void update_service_motion() {
-    if (service_motion.mode == ruka3::ServiceMotionMode::idle || !motor ||
-        !joint_controller.accepts_motor_commands() || get_fault_snapshot().level == ruka3::FaultLevel::fault) return;
-    bool valid = false;
+    if (!motor || !joint_controller.accepts_motor_commands() ||
+        get_fault_snapshot().level == ruka3::FaultLevel::fault) return;
+    const auto now = millis_32();
+    const auto& output = output_observer.snapshot();
+    const auto& limits = mechanical_calibration.snapshot();
+    const bool was_running = service_controller.autonomous_motion_active();
+    if (!service_controller.update(now, output.fused_angle, limits)) return;
+    if (was_running && !service_controller.autonomous_motion_active()) command_supervisor.complete_autonomous_command(now);
+    constexpr auto& profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
+    bool valid;
+    CRITICAL_SECTION({
     if (service_motion.mode == ruka3::ServiceMotionMode::voltage) {
-        valid = motor->set_voltage_point(limit_direct_voltage(service_motion.target));
+        valid = motor->set_voltage_point(kPositionDirection * profile.motor_command_sign *
+            service_motion.target * ruka3::outward_command_scale(service_motion.target, output.fused_angle, limits));
+    } else if (service_motion.mode == ruka3::ServiceMotionMode::current) {
+        valid = motor->set_foc_point(FOCTarget{.torque = kPositionDirection *
+            limit_output_directional_command(service_motion.target) * profile.motor.torque_const * profile.gear_ratio});
     } else {
-        const auto& output = output_observer.snapshot();
-        const float target = output_soft_limited_target(service_motion.target);
-        service_motion.error = target - output.fused_angle;
-        const float motor_target = motor->get_angle() + kPositionDirection * service_motion.error;
-        const auto& tuning = ruka3::joint_profile(RUKA3_JOINT_INDEX).command;
+        const float amp_to_torque = profile.motor.torque_const * profile.gear_ratio;
+        const float base_current = ruka3::position_current_request(service_motion, output.fused_velocity,
+            profile.motor.torque_const, profile.gear_ratio);
+        const float current_limit = std::min(profile.motor.nominal_current, profile.motor.torque_limit/amp_to_torque);
+        const float load_current = service_controller.compensate_load(now, output.fused_angle, base_current, current_limit, limits);
         valid = motor->set_foc_point(FOCTarget{
-            .torque = 0.0F, .angle = motor_target, .velocity = 0.0F,
-            .angle_kp = tuning.default_position_kp,
-            .velocity_kp = tuning.default_velocity_kp,
+            .torque = kPositionDirection * (service_motion.torque + load_current*amp_to_torque),
+            .angle = motor->get_angle() + kPositionDirection * service_motion.error,
+            .velocity = motor->get_velocity() + kPositionDirection * (service_motion.velocity-output.fused_velocity),
+            // VBDrive divides P/D by Kt, but feedforward by Kt*gear.
+            .angle_kp = service_motion.kp / profile.gear_ratio,
+            .velocity_kp = service_motion.kd / profile.gear_ratio,
         });
     }
-    if (valid) command_supervisor.note_accepted_command(millis_32());
-    else service_cancel();
+    })
+    if (!valid) service_cancel();
 }
 
 bool set_motor_enabled(bool enabled) {
     if (!motor) return false;
-    const auto& tuning = ruka3::joint_profile(RUKA3_JOINT_INDEX).command;
     if (!enabled) {
         service_cancel();
         const bool target_set = motor->set_foc_point(FOCTarget{
@@ -312,23 +313,20 @@ bool set_motor_enabled(bool enabled) {
         joint_controller.disarm();
         return target_set && outputs_disabled;
     }
-    if (!motor_calibration_valid || !mechanical_calibration.snapshot().limits_valid ||
+    if (joint_controller.accepts_motor_commands() && motor->is_on()) return true;
+    if (mechanical_calibration.core().blocks_normal_control() || !motor_calibration_valid || !mechanical_calibration.snapshot().limits_valid ||
         !joint_controller.arm()) {
         return false;
     }
-    if (!motor->set_foc_point(FOCTarget{
-            .torque = 0.0F, .angle = motor->get_angle(), .velocity = 0.0F,
-            .angle_kp = tuning.default_position_kp,
-            .velocity_kp = tuning.default_velocity_kp,
-        })) {
-        joint_controller.disarm();
-        return false;
-    }
+    // Keep the bridge at zero voltage until PWM is enabled; only then engage
+    // position hold around the angle measured at that moment.
+    motor->set_voltage_point(0.0F);
     if (motor->set_bridge_outputs_enabled(true) != HAL_OK) {
-        motor->set_foc_point(FOCTarget{0});
         joint_controller.disarm();
         return false;
     }
+    service_hold();
+    command_supervisor.note_accepted_command(millis_32());
     return true;
 }
 
@@ -340,9 +338,10 @@ bool acknowledge_faults() {
 }
 
 static void update_fault_manager() {
-    // STSPIN asserts DRV_FAULT while it is deliberately held in standby.
-    // A disabled bridge is therefore an expected state, not a hardware fault.
-    const bool driver_fault = motor->is_on() &&
+    // STSPIN asserts DRV_FAULT while deliberately held in standby. When it
+    // is awake, keep sampling the pin even after disabling PWM so a real
+    // driver fault cannot be acknowledged while it is still present.
+    const bool driver_fault = driver_awake &&
         (HAL_GPIO_ReadPin(DRV_FAULT_GPIO_Port, DRV_FAULT_Pin) == GPIO_PIN_RESET);
     const auto& inverter = static_cast<const VBInverter&>(motor->get_inverter());
     const ruka3::FaultInputs inputs{
@@ -354,10 +353,12 @@ static void update_fault_manager() {
     };
     // Communication state is diagnostic only. The transport owns CAN recovery
     // and the command supervisor holds the current target when commands stop.
-    // Only a local power-stage fault may put the bridge in standby.
+    // A local power-stage fault disables PWM but leaves STSPIN awake so CAN
+    // communication remains available for diagnosis and recovery.
     if (fault_manager.update(inputs) && driver_fault) {
+        service_cancel();
         motor->set_foc_point(FOCTarget{0});
-        motor->set_state(false);
+        (void)motor->set_bridge_outputs_enabled(false);
         joint_controller.fault();
     }
 
@@ -374,7 +375,8 @@ int32_t get_motor_calibration_offset() { return calibration_data.meas_elec_offse
 bool is_motor_encoder_inverted() { return calibration_data.is_encoder_inverted; }
 bool is_motor_calibration_pending() { return motor_calibration_pending; }
 bool request_motor_calibration() {
-    if (!motor || joint_controller.accepts_motor_commands() || motor_calibration_pending) return false;
+    if (!motor || joint_controller.accepts_motor_commands() || motor_calibration_pending ||
+        mechanical_calibration.core().blocks_normal_control()) return false;
     motor_calibration_pending = true;
     motor_calibration_requested_at = millis_32();
     return true;
@@ -474,7 +476,12 @@ bool do_calibrate() {
     }
     calibration_data.reset();
     // NOTE: see app.h lines 20-21 for details on cyphal_queue_buffer_shared
-    motor->calibrate(calibration_data, cyphal_queue_buffer_shared, SHARED_BUFFER_SIZE);
+    if (!motor->calibrate(calibration_data, cyphal_queue_buffer_shared, SHARED_BUFFER_SIZE)) {
+        motor->set_bridge_outputs_enabled(false);
+        motor_calibration_valid = false;
+        joint_controller.calibration_finished(false);
+        return false;
+    }
     calibration_data.was_calibrated = true;
     HAL_IMPORTANT(eeprom.write<CalibrationData>(&calibration_data, CALIBRATION_PLACEMENT))
     motor->apply_calibration(calibration_data);
@@ -508,7 +515,12 @@ void app() {
     eeprom.wait_until_available();
     constexpr auto& profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
     mechanical_calibration.load(profile.output_encoder_zero);
+    output_observer.set_calibration(&mechanical_calibration.core());
     output_observer.set_encoder_zero(mechanical_calibration.snapshot().encoder_zero);
+    if (mechanical_calibration.snapshot().limits_valid) {
+        output_observer.set_calibrated_limits(mechanical_calibration.snapshot().lower_limit,
+                                              mechanical_calibration.snapshot().upper_limit);
+    }
 
     // Keep CAN bring-up isolated from motor, encoder, and gate-driver startup.
     // This is the ordering validated by the stable G431 firmware.
@@ -543,22 +555,19 @@ void app() {
     HAL_TIM_Base_Start_IT(&htim4);
     const uint32_t auto_arm_at = millis_32() + 250U;
     // Disabled while diagnosing J5 power-stage interference. Arming remains
-    // explicitly available through set_arm.
+    // explicitly available through arm.
     bool auto_arm_pending = false;
 
     while(true) {
+        calibration_service_update(millis_32());
         output_observer.update(millis_32(), motor->get_shaft_encoder_value(),
                                kPositionDirection * motor->get_angle());
         update_service_motion();
         can_fault_monitor.poll();
-        if (command_supervisor.update(millis_32())) {
-            service_cancel();
-            const auto& tuning = ruka3::joint_profile(RUKA3_JOINT_INDEX).command;
-            motor->set_foc_point(FOCTarget{
-                .torque = 0.0F, .angle = motor->get_angle(), .velocity = 0.0F,
-                .angle_kp = tuning.default_position_kp,
-                .velocity_kp = 0.0F,
-            });
+        update_register_diagnostics(millis_32());
+        if (command_supervisor.update(millis_32(), service_controller.autonomous_motion_active()) &&
+            !mechanical_calibration.core().blocks_normal_control() && joint_controller.accepts_motor_commands()) {
+            service_hold();
         }
         update_fault_manager();
         if (auto_arm_pending && static_cast<int32_t>(millis_32() - auto_arm_at) >= 0) {
@@ -568,6 +577,10 @@ void app() {
             }
         }
         cyphal_loop();
+        if (reset_pending &&
+            static_cast<int32_t>(millis_32() - reset_requested_at) >= 250) {
+            NVIC_SystemReset();
+        }
         // Let the register response leave the CAN queue before calibration
         // reuses its RAM workspace. Reboot immediately afterwards so the
         // Cyphal allocator never runs on overwritten memory.
@@ -591,30 +604,11 @@ void app() {
 #ifndef NO_CYPHAL
 //#pragma region Cyphal
 using FOCState = voltbro_foc_state_simple_1_0;
-using SpecificControl = voltbro_foc_specific_control_1_0;
 
-static constexpr CanardPortID FOC_COMMAND_PORT = ruka3::protocol::kMitCommandBase;
+static constexpr CanardPortID FOC_COMMAND_PORT =
+    ruka3::joint_profile(RUKA3_JOINT_INDEX).servo_subject_id;
 static constexpr CanardPortID FOC_STATE_PORT =
     ruka3::joint_profile(RUKA3_JOINT_INDEX).feedback_subject_id;
-static constexpr CanardPortID SPECIFIC_CONTROL_PORT = ruka3::protocol::kSpecificControlBase;
-
-static bool is_voltage_target_valid(float voltage) {
-    constexpr auto& motor_profile = ruka3::joint_profile(RUKA3_JOINT_INDEX).motor;
-    return std::isfinite(voltage) && std::fabs(voltage) <= motor_profile.max_voltage;
-}
-
-static bool is_output_position_target_valid(float target) {
-    const auto& output = output_observer.snapshot();
-    const auto& limits = mechanical_calibration.snapshot();
-    return output.initialized && std::isfinite(target) &&
-        limits.limits_valid && target >= limits.lower_limit && target <= limits.upper_limit;
-}
-
-static float output_target_to_motor_target(float output_target) {
-    return motor->get_angle() + kPositionDirection *
-        (output_target - output_observer.snapshot().fused_angle);
-}
-
 static void reboot_to_bootloader_if_requested() {
     if (!bootloader_reboot_pending) {
         return;
@@ -643,99 +637,30 @@ void in_loop_reporting(millis current_t) {
         state_msg.timestamp.microsecond = system_time();
 
         const auto& output = output_observer.snapshot();
-        state_msg.angle.radian = output.initialized ? output.fused_angle : kPositionDirection * motor->get_angle();
-        state_msg.velocity.radian_per_second = output.initialized ? output.fused_velocity : kPositionDirection * motor->get_velocity();
-        state_msg._torque.newton_meter = motor->get_torque();
+        state_msg.angle.radian = output.fused_angle;
+        state_msg.velocity.radian_per_second = output.fused_velocity;
+        state_msg._torque.newton_meter = kPositionDirection * motor->get_torque();
 
-        state_msg.current.ampere = motor->get_working_current();
+        state_msg.current.ampere = kPositionDirection * motor->get_working_current();
         state_msg.bus_voltage.volt = motor_inverter.get_busV();
 
         constexpr float KELVIN_OFFSET = 273.15f;
         state_msg.mcu_temp.kelvin = motor_inverter.get_mcu_temperature() + KELVIN_OFFSET;
         state_msg.stator_temp.kelvin = motor_inverter.get_stator_temperature() + KELVIN_OFFSET;
 
-        state_msg.has_fault.value = get_fault_snapshot().level == ruka3::FaultLevel::fault;
+        state_msg.has_fault.value = get_fault_snapshot().latched != 0;
 
         static CanardTransferID state_transfer_id = 0;
         get_interface()->send_msg(&state_msg, FOC_STATE_PORT, &state_transfer_id);
     })
 }
 
-class FOCCommandSub: public AbstractSubscription<voltbro_foc_MIT_1_0> {
+class FOCCommandSub: public AbstractSubscription<voltbro_foc_command_1_0> {
 public:
-    FOCCommandSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<voltbro_foc_MIT_1_0>(interface, port_id) {};
-    void handler(const voltbro_foc_MIT_1_0& msg, CanardRxTransfer*) override {
-        if (!joint_controller.accepts_motor_commands()) {
-            record_invalid_command();
-            return;
-        }
-        if (!is_output_position_target_valid(msg.pos.radian)) {
-            record_invalid_command();
-            return;
-        }
-        const float target = output_soft_limited_target(msg.pos.radian);
-        bool is_valid = motor->set_foc_point(FOCTarget {
-            .torque = kPositionDirection * limit_output_directional_command(msg._torq.newton_meter),
-            .angle = output_target_to_motor_target(target),
-            .velocity = kPositionDirection * limit_output_directional_command(msg.vel.radian_per_second),
-            .angle_kp = msg.pos_gain.value,
-            .velocity_kp = msg.vel_gain.value
-        });
-        if (!is_valid) {
-            record_invalid_command();
-        } else {
-            service_cancel();
-            command_supervisor.note_accepted_command(millis_32());
-        }
-    }
-};
-
-class SpecificControlSub: public AbstractSubscription<SpecificControl> {
-public:
-    SpecificControlSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<SpecificControl>(interface, port_id) {};
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wunused-parameter"
-    // NOTE: transfer parameter required by the interface, but not used in this implementation
-    void handler(const SpecificControl& msg, CanardRxTransfer* _) override {
-        if (!joint_controller.accepts_motor_commands()) {
-            record_invalid_command();
-            return;
-        }
-    #pragma GCC diagnostic pop
-        bool is_valid = false;
-        switch (msg.set_point_type){
-            case voltbro_foc_specific_control_1_0_VELOCITY:
-                is_valid = motor->set_velocity_point(
-                    kPositionDirection * limit_output_directional_command(msg.set_point_value));
-                break;
-            case voltbro_foc_specific_control_1_0_TORQUE:
-                is_valid = motor->set_torque_point(
-                    kPositionDirection * limit_output_directional_command(msg.set_point_value));
-                break;
-            case voltbro_foc_specific_control_1_0_POSITION:
-                if (is_output_position_target_valid(msg.set_point_value)) {
-                    const auto& tuning = ruka3::joint_profile(RUKA3_JOINT_INDEX).command;
-                    const float target = output_soft_limited_target(msg.set_point_value);
-                    is_valid = motor->set_foc_point(FOCTarget{
-                        .torque = 0.0F, .angle = output_target_to_motor_target(target),
-                        .velocity = 0.0F, .angle_kp = tuning.default_position_kp,
-                        .velocity_kp = tuning.default_velocity_kp,
-                    });
-                }
-                break;
-            case voltbro_foc_specific_control_1_0_VOLTAGE:
-                is_valid = is_voltage_target_valid(msg.set_point_value) &&
-                    motor->set_voltage_point(limit_direct_voltage(msg.set_point_value));
-                break;
-            default:
-                break;
-        }
-        if (!is_valid) {
-            record_invalid_command();
-        } else {
-            service_cancel();
-            command_supervisor.note_accepted_command(millis_32());
-        }
+    FOCCommandSub(InterfacePtr interface, CanardPortID port_id): AbstractSubscription<voltbro_foc_command_1_0>(interface, port_id) {};
+    void handler(const voltbro_foc_command_1_0& msg, CanardRxTransfer*) override {
+        if (!service_set_servo(msg.angle.radian, msg.velocity.radian_per_second, msg._torque.newton_meter,
+                               msg.angle_kp.value, msg.velocity_kp.value)) record_invalid_command();
     }
 };
 
@@ -743,100 +668,7 @@ public:
 ReservedObject<NodeInfoReader> node_info_reader;
 ReservedObject<RegistersHandler<PARAMETER_CATALOG.size(), StaticRegisters<PARAMETER_CATALOG.size()>>> registers_handler;
 ReservedObject<FOCCommandSub> foc_command_sub;
-ReservedObject<SpecificControlSub> specific_control_sub;
 
-static void handle_parameter_register(
-    size_t index,
-    const uavcan_register_Value_1_0& v_in,
-    uavcan_register_Value_1_0& v_out,
-    RegisterAccessResponse& response
-) {
-    const auto& definition = PARAMETER_CATALOG[index];
-    response.persistent = definition.is_persistent;
-    response._mutable = definition.is_mutable;
-
-    // Keep RUKA2's service convention: a read of set_zero is an explicit
-    // calibration trigger, with its result carried by the same response.
-    if (definition.id == ParameterId::ZERO_SET && v_in._tag_ == REGISTER_EMPTY_TAG) {
-        fill_register_integer32(v_out, service_set_zero() ? 1 : 0);
-        return;
-    }
-
-    if (definition.is_mutable && v_in._tag_ != REGISTER_EMPTY_TAG) {
-        ParameterValue requested{};
-        bool parsed = false;
-        switch (definition.type) {
-            case ParameterType::REAL32:
-                parsed = parse_register_real32(v_in, requested.emplace<float>());
-                break;
-            case ParameterType::REAL32_ARRAY:
-                break;
-            case ParameterType::NATURAL32:
-                parsed = parse_register_natural32(v_in, requested.emplace<uint32_t>());
-                if (!parsed) {
-                    int32_t signed_value = 0;
-                    parsed = parse_register_integer32(v_in, signed_value) && signed_value >= 0;
-                    if (parsed) requested = static_cast<uint32_t>(signed_value);
-                }
-                break;
-            case ParameterType::INTEGER32:
-                parsed = parse_register_integer32(v_in, requested.emplace<int32_t>());
-                break;
-            case ParameterType::BIT:
-                parsed = parse_register_bit(v_in, requested.emplace<bool>());
-                if (!parsed) {
-                    int32_t signed_value = 0;
-                    uint32_t unsigned_value = 0;
-                    float real_value = 0;
-                    if (parse_register_integer32(v_in, signed_value)) {
-                        requested = signed_value != 0;
-                        parsed = true;
-                    } else if (parse_register_natural32(v_in, unsigned_value)) {
-                        requested = unsigned_value != 0;
-                        parsed = true;
-                    } else if (parse_register_real32(v_in, real_value)) {
-                        requested = real_value != 0;
-                        parsed = true;
-                    }
-                }
-                break;
-            case ParameterType::STRING:
-                break;
-        }
-        if (parsed) (void)write_runtime_parameter(definition.id, requested);
-    }
-
-    ParameterValue current{};
-    if (!read_parameter(definition.id, current)) {
-        v_out._tag_ = REGISTER_EMPTY_TAG;
-        v_out.empty = {};
-        return;
-    }
-    switch (definition.type) {
-        case ParameterType::REAL32:
-            fill_register_real32(v_out, std::get<float>(current));
-            break;
-        case ParameterType::REAL32_ARRAY: {
-            const auto& values = std::get<AngleDiagnostics>(current);
-            v_out._tag_ = REGISTER_REAL32_TAG;
-            for (size_t i = 0; i < values.size(); ++i) v_out.real32.value.elements[i] = values[i];
-            v_out.real32.value.count = values.size();
-            break;
-        }
-        case ParameterType::NATURAL32:
-            fill_register_natural32(v_out, std::get<uint32_t>(current));
-            break;
-        case ParameterType::INTEGER32:
-            fill_register_integer32(v_out, std::get<int32_t>(current));
-            break;
-        case ParameterType::BIT:
-            fill_register_bit(v_out, std::get<bool>(current));
-            break;
-        case ParameterType::STRING:
-            fill_register_string(v_out, std::get<std::string_view>(current));
-            break;
-    }
-}
 
 void setup_subscriptions() {
     auto cyphal_interface = get_interface();
@@ -864,8 +696,7 @@ void setup_subscriptions() {
         VBDRIVE_VCS_REVISION_ID
     );
 
-    specific_control_sub.create(cyphal_interface, SPECIFIC_CONTROL_PORT + node_id);
-    foc_command_sub.create(cyphal_interface, FOC_COMMAND_PORT + node_id);
+    foc_command_sub.create(cyphal_interface, FOC_COMMAND_PORT);
 
     HAL_IMPORTANT(apply_filter(
         0,
@@ -885,11 +716,14 @@ void setup_subscriptions() {
         node_info_reader->make_filter(node_id)
     ))
 
-    HAL_IMPORTANT(apply_filter(
-        3,
-        &hfdcan1,
-        specific_control_sub->make_filter(node_id)
-    ))
+    // Keep the existing message-RAM layout; disable the retired SpecificControl filter.
+    FDCAN_FilterTypeDef retired_filter{};
+    retired_filter.IdType = FDCAN_EXTENDED_ID;
+    retired_filter.FilterIndex = 3;
+    retired_filter.FilterType = FDCAN_FILTER_MASK;
+    retired_filter.FilterConfig = FDCAN_FILTER_DISABLE;
+    HAL_IMPORTANT(HAL_FDCAN_ConfigFilter(&hfdcan1, &retired_filter))
+
 }
 //#pragma endregion
 #endif

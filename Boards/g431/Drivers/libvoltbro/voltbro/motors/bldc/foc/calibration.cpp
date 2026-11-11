@@ -64,7 +64,9 @@ public:
 };
 
 // NOTE: caller has to GUARANTEE that calculations_buffer is AT LEAST (CALIBRATION_BUFF_SIZE + 1) * sizeof(int) bytes long
-void FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buffer, size_t buffer_size) {
+bool FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buffer, size_t buffer_size) {
+    // Calibration measures the encoder itself, not a previously corrected angle.
+    lookup_table = nullptr;
     volatile struct CalibrationStats {
         int soft_gaps_n = 0;
         int hard_gaps_n = 0;
@@ -106,21 +108,10 @@ void FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buf
         }
         return diff;
     };
-    auto return_to_zero = [this, &ppairs, &set_electric_angle, &get_circular_error]() {
-        float angle = 0.0f;
-        set_electric_angle(angle, 100);
-
-        float step = ppairs * pi2 / 4000.0f;
-        if (raw_elec_angle < (encoder.CPR / 2.0f)) {
-            step = -step;
-        }
-        while(abs(get_circular_error(encoder.get_value(), 0, encoder.CPR)) > (encoder.CPR / 1000)) {
-            angle += step;
-            set_electric_angle(angle, 5);
-        }
-        set_electric_angle(0.0f, 100);
-
-        return raw_elec_angle;
+    // Align only to the nearest electrical equilibrium. Do not seek the
+    // absolute encoder zero: all following passes start/end at field phase 0.
+    auto align_field_zero = [&set_electric_angle]() {
+        set_electric_angle(0.0f, 500);
     };
 
     const int ppair_step_counts = 50;
@@ -139,7 +130,7 @@ void FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buf
 
         for (int i = 0; i < ppairs; i++) {
             const float local_zero_point = pi2 * i;
-            set_electric_angle(local_zero_point);
+            set_electric_angle(local_zero_point, 100);
 
             int expected_value = encoder_steps_per_pair * i;
             int current_value = int(encoder.get_value()) - offset;
@@ -161,7 +152,7 @@ void FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buf
 
         for (int i = ppairs - 1; i >= 0; i--) {
             const float local_zero_point = pi2 * (i + 1);
-            set_electric_angle(local_zero_point);
+            set_electric_angle(local_zero_point, 100);
 
             int expected_value = encoder_steps_per_pair * (i + 1);
             int current_value = int(encoder.get_value()) - offset;
@@ -173,14 +164,11 @@ void FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buf
             }
         }
 
-        int offset_sum = 0;
-        for (auto& sample : offset_samples) {
-            offset_sum += sample;
-        }
-        return offset_sum / samples_count;
+        return motor_calibration::electrical_offset_mean(
+            offset_array, samples_count, encoder_steps_per_pair);
     };
 
-    return_to_zero();
+    align_field_zero();
     int average_offset = offset_calibration_pass(offset_samples, 0);
     calibration_data.meas_elec_offset = average_offset;
 
@@ -189,17 +177,23 @@ void FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buf
 #else
     int verification_samples[samples_count] = {0};
 #endif
-    return_to_zero();
+    align_field_zero();
     processing_stats.average_electric_discrepancy = offset_calibration_pass(verification_samples, average_offset);
     for (auto sample : verification_samples) {
-        if (abs(sample) > (encoder_steps_per_pair / 10)) {
+        if (abs(motor_calibration::circular_error(sample, 0, encoder_steps_per_pair)) > (encoder_steps_per_pair / 10)) {
             zero_pwm();
-            Error_Handler(); // Calibration failed
+            return false; // Do not persist a failed electrical alignment.
         }
     }
 //#pragma endregion
 
-    return_to_zero();
+    align_field_zero();
+    // Pick the equivalent electrical offset nearest this sweep's rotor turn,
+    // so the correction curve does not inherit an arbitrary whole-pole offset.
+    const float pole_pitch = static_cast<float>(encoder.CPR) / ppairs;
+    average_offset += static_cast<int>(std::lround(
+        (static_cast<int>(encoder.get_value()) - average_offset) / pole_pitch) * pole_pitch);
+    calibration_data.meas_elec_offset = average_offset;
 
 //#pragma region Curve Sampling
     #pragma GCC diagnostic push
@@ -246,7 +240,7 @@ void FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buf
             offset_encoder_value -= encoder.CPR;
         }
 
-        size_t idx = static_cast<size_t>(offset_encoder_value >> 3);
+        size_t idx = motor_calibration::lut_index(encoder.get_value());
         if (idx >= arr->size()) {
             Error_Handler(); // Should never happen if buffer size is correct
         }
@@ -322,75 +316,30 @@ void FOC::calibrate(CalibrationData& calibration_data, std::byte* additional_buf
     (*bwd_calibration_array) = *final_array.get_container();
     const CircularArray<calibration_array_t, CALIBRATION_BUFF_SIZE> src(bwd_calibration_array);
 
-    constexpr int TAPS = 9;
-    constexpr int BLOCK = 16;
-    constexpr int DELAY = (TAPS - 1) / 2;
-
-    static const float32_t FIR_COEFFS[TAPS] = {
-        0.04f, 0.09f, 0.15f, 0.22f, 0.25f,
-        0.22f, 0.15f, 0.09f, 0.04f
-    };
-
-    static float32_t fir_state_sig[TAPS + BLOCK - 1];
-    static float32_t fir_state_mask[TAPS + BLOCK - 1];
-
-    static float32_t block_in_sig[BLOCK];
-    static float32_t block_in_mask[BLOCK];
-    static float32_t block_out_sig[BLOCK];
-    static float32_t block_out_mask[BLOCK];
-
-    arm_fir_instance_f32 fir_sig;
-    arm_fir_instance_f32 fir_mask;
-
-    arm_fir_init_f32(&fir_sig,  TAPS, (float32_t*)FIR_COEFFS, fir_state_sig,  BLOCK);
-    arm_fir_init_f32(&fir_mask, TAPS, (float32_t*)FIR_COEFFS, fir_state_mask, BLOCK);
-
-    // Prime FIR state with circular pre-roll
-    for (int i = 0; i < TAPS - 1; i++) {
-        int idx = -((TAPS - 1) - i) + DELAY;
-        float v = (src[idx] == SENTINEL_EMPTY) ? 0.0f : (float32_t)src[idx];
-        float m = (src[idx] == SENTINEL_EMPTY) ? 0.0f : 1.0f;
-        fir_state_sig[i]  = v;
-        fir_state_mask[i] = m;
-    }
-
-    for (size_t b = 0; b < CALIBRATION_BUFF_SIZE; b += BLOCK) {
-        for (size_t i = 0; i < BLOCK; i++) {
-            size_t idx = b + i + DELAY;
-
-            float32_t v = (src[idx] == SENTINEL_EMPTY) ? 0.0f : (float32_t)src[idx];
-            float32_t m = (src[idx] == SENTINEL_EMPTY) ? 0.0f : 1.0f;
-
-            block_in_sig[i]  = v;
-            block_in_mask[i] = m;
+    // Offline, zero-phase smoothing of the measured periodic correction.
+    // Wider than an individual 8-tick bucket to reject sampling/settling noise;
+    // the independent source buffer keeps every output free of feedback.
+    constexpr int RADIUS = 16;
+    for (std::size_t i = 0; i < CALIBRATION_BUFF_SIZE; ++i) {
+        float weighted_sum = 0.0F;
+        float weight_sum = 0.0F;
+        for (int delta = -RADIUS; delta <= RADIUS; ++delta) {
+            const int sample = src[static_cast<int>(i) + delta];
+            if (sample == SENTINEL_EMPTY) continue;
+            const float weight = RADIUS + 1 - std::abs(delta);
+            weighted_sum += weight * sample;
+            weight_sum += weight;
         }
-
-        arm_fir_f32(&fir_sig,  block_in_sig,  block_out_sig,  BLOCK);
-        arm_fir_f32(&fir_mask, block_in_mask, block_out_mask, BLOCK);
-
-        for (size_t i = 0; i < BLOCK; i++) {
-            size_t idx = b + i;
-            if (idx >= CALIBRATION_BUFF_SIZE) {
-                break;
-            }
-
-            float norm = block_out_mask[i];
-
-            if (norm > 0.001f) {
-                final_array[idx] = (int)roundf(block_out_sig[i] / norm);
-            }
-            else {
-                // fallback (should not happen)
-                final_array[idx] = 0;
-                Error_Handler();
-            }
-        }
+        if (weight_sum == 0.0F) return false;
+        final_array[i] = static_cast<int>(std::lround(weighted_sum / weight_sum));
     }
 
 //#pragma endregion
 
     memset(additional_buffer, 0, buffer_size);
-    asm volatile("nop");  // debug breakpoint
+    // Use the already aligned table pointer: binding a packed array field to
+    // a const reference would create an 8-KB temporary on the MCU stack.
+    return motor_calibration::monotonic_lut(*fwd_calibration_array, encoder.CPR);
 }
 
 #endif

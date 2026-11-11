@@ -21,7 +21,8 @@ enum class SetPointType: uint8_t  {
     TORQUE = 1,
     POSITION = 2,
     VOLTAGE = 3,
-    UNIVERSAL = 4
+    UNIVERSAL = 4,
+    CURRENT = 5
 };
 
 enum class DrivePhase: uint8_t { PHASE_A = 0, PHASE_B = 1, PHASE_C = 2 };
@@ -34,6 +35,11 @@ struct DriveInfo {
     float stall_timeout;
     float stall_tolerance;
     float calibration_voltage;
+    // Raw q-axis current producing positive native joint torque.
+    int8_t current_direction = 1;
+    float modulation_voltage_ratio;
+    uint16_t max_pwm_ticks;
+    float phase_current_trip_a;
 
     const std::optional<std::array<GpioPin, 3>> l_pins = std::nullopt;
     const GpioPin en_pin;
@@ -57,8 +63,8 @@ protected:
     arm_atomic(float) shaft_angle;
     arm_atomic(float) shaft_velocity;
     arm_atomic(float) shaft_torque = 0;
-    arm_atomic(bool) _is_on;
-    arm_atomic(bool) is_stalling;
+    arm_atomic(bool) _is_on = false;
+    arm_atomic(bool) is_stalling = false;
     uint16_t DQs[3] = {0, 0, 0};
 public:
     BLDCController(
@@ -98,24 +104,20 @@ public:
     }
 
     FORCE_INLINE virtual bool set_angle_point(float angle) {
-        point_type = SetPointType::POSITION;
-        target = angle;
+        CRITICAL_SECTION({ target = angle; point_type = SetPointType::POSITION; })
         return true;
     }
 
     FORCE_INLINE virtual bool set_velocity_point(float velocity) {
-        point_type = SetPointType::VELOCITY;
-        target = velocity;
+        CRITICAL_SECTION({ target = velocity; point_type = SetPointType::VELOCITY; })
         return true;
     }
     FORCE_INLINE virtual bool set_torque_point(float torque) {
-        point_type = SetPointType::TORQUE;
-        target = torque;
+        CRITICAL_SECTION({ target = torque; point_type = SetPointType::TORQUE; })
         return true;
     }
     FORCE_INLINE virtual bool set_voltage_point(float voltage) {
-        point_type = SetPointType::VOLTAGE;
-        target = voltage;
+        CRITICAL_SECTION({ target = voltage; point_type = SetPointType::VOLTAGE; })
         return true;
     }
     const DriveInfo& get_info() const {

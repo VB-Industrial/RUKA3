@@ -4,7 +4,10 @@
 #include "stm32g4xx_hal.h"
 #include "stm32g4xx_hal_conf.h"
 #ifdef HAL_ADC_MODULE_ENABLED
+#include "main.h"
 #include <cstdint>
+#include <array>
+#include "phase_current_sense.hpp"
 
 
 #ifdef MONITOR
@@ -37,11 +40,17 @@ public:
 
 class Inverter: public BaseInverter {
 private:
-    const volatile uint32_t ADC_buffer[4] = {};
+    volatile uint32_t ADC_buffer[4] = {};
     ADC_HandleTypeDef* hadc;
+    const ruka3::PhaseCurrentSense& sense;
 
 public:
-    Inverter(ADC_HandleTypeDef* hadc): hadc(hadc) {}
+    Inverter(ADC_HandleTypeDef* hadc, const ruka3::PhaseCurrentSense& sense): hadc(hadc), sense(sense) {}
+
+    std::array<std::uint32_t, 4> raw_adc() const {
+        return {ADC_buffer[0], ADC_buffer[1], ADC_buffer[2], ADC_buffer[3]};
+    }
+    std::array<float, 3> offset_volts() const { return {I_A_offset, I_B_offset, I_C_offset}; }
 
     void start() override {
         if (has_started()) {
@@ -49,34 +58,31 @@ public:
         }
 
         // apply factory calibration
-        HAL_ADCEx_Calibration_Start(hadc, ADC_SINGLE_ENDED);
+        HAL_IMPORTANT(HAL_ADCEx_Calibration_Start(hadc, ADC_SINGLE_ENDED))
         // const_cast to allow HAL to work
-        HAL_ADC_Start_DMA(hadc, const_cast<uint32_t *>(ADC_buffer), 4);
+        HAL_IMPORTANT(HAL_ADC_Start_DMA(hadc, const_cast<uint32_t *>(ADC_buffer), 4))
+        // The control ISR reads this circular buffer directly; empty HT/TC
+        // callbacks would otherwise interrupt it twice per four-rank scan.
+        __HAL_DMA_DISABLE_IT(hadc->DMA_Handle, DMA_IT_HT | DMA_IT_TC);
         // Record offset;
-        int cycles = 64;
-        for (int i = 0; i < cycles; i++) {
-            I_A_offset += (3.3f * (float)ADC_buffer[1] / (16.0f * 4096.0f));
-            I_B_offset += (3.3f * (float)ADC_buffer[2] / (16.0f * 4096.0f));
-            I_C_offset += (3.3f * (float)ADC_buffer[3] / (16.0f * 4096.0f));
+        for (unsigned i = 0; i < sense.offset_samples; i++) {
             HAL_Delay(1);
+            I_A_offset += sense.adc_voltage(ADC_buffer[1]);
+            I_B_offset += sense.adc_voltage(ADC_buffer[2]);
+            I_C_offset += sense.adc_voltage(ADC_buffer[3]);
         }
-        I_A_offset /= (float)cycles;
-        I_B_offset /= (float)cycles;
-        I_C_offset /= (float)cycles;
+        I_A_offset /= sense.offset_samples;
+        I_B_offset /= sense.offset_samples;
+        I_C_offset /= sense.offset_samples;
 
         is_started = true;
     }
 
     void update() override {
-        const float shunt_res = 0.045f;  // 0.045 Ohm shunt resistance
-        const float op_amp_gain = 1.0f;  // current sensor gain
-        I_A = ((3.3f * (float)ADC_buffer[1] / (16.0f * 4096.0f)) - I_A_offset) /
-              (shunt_res * op_amp_gain);
-        I_B = ((3.3f * (float)ADC_buffer[2] / (16.0f * 4096.0f)) - I_B_offset) /
-              (shunt_res * op_amp_gain);
-        I_C = ((3.3f * (float)ADC_buffer[3] / (16.0f * 4096.0f)) - I_C_offset) /
-              (shunt_res * op_amp_gain);
-        busV = 16.0f * 3.3f * (float)ADC_buffer[0] / (16.0f * 4096.0f);  // drivers input voltage
+        I_A = sense.phase_current(ADC_buffer[1], I_A_offset, 0);
+        I_B = sense.phase_current(ADC_buffer[2], I_B_offset, 1);
+        I_C = sense.phase_current(ADC_buffer[3], I_C_offset, 2);
+        busV = sense.bus_voltage_gain * sense.adc_voltage(ADC_buffer[0]);
         #ifdef MONITOR
             I_A_glob = I_A;
             I_B_glob = I_B;

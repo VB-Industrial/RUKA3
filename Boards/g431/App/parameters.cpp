@@ -1,6 +1,9 @@
 #include "app.h"
 #include "parameters.hpp"
 #include "robot_config.h"
+#include "calibration_service.hpp"
+#include "tim.h"
+#include <limits>
 
 #ifndef VBDRIVE_MODEL
 #error "VBDRIVE_MODEL must be defined by CMake"
@@ -12,7 +15,7 @@
 static uint32_t invalid_commands_counter = 0;
 void record_invalid_command() { invalid_commands_counter += 1; }
 
-bool read_parameter(ParameterId id, ParameterValue& value) {
+bool read_board_parameter(ParameterId id, ParameterValue& value) {
     value = {};
     const auto& can_faults = get_can_fault_snapshot();
     const auto& command = get_command_snapshot();
@@ -23,6 +26,7 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
     switch (id) {
         case ParameterId::NODE_ID: value.emplace<uint32_t>(ruka3::joint_profile(RUKA3_JOINT_INDEX).node_id); return true;
         case ParameterId::BOOTLOADER: value.emplace<bool>(bootloader_reboot_pending); return true;
+        case ParameterId::RESET: value.emplace<bool>(reset_pending); return true;
         case ParameterId::CMD_ERRORS: value.emplace<uint32_t>(invalid_commands_counter); return true;
         case ParameterId::MODEL: value.emplace<std::string_view>(VBDRIVE_MODEL); return true;
         case ParameterId::REVISION: value.emplace<std::string_view>(VBDRIVE_FIRMWARE_REV); return true;
@@ -49,7 +53,8 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::ZERO_SET: value.emplace<int32_t>(0); return true;
         case ParameterId::SET_LIMIT: value.emplace<uint32_t>(mechanical.limit_stage); return true;
         case ParameterId::MOVE: value.emplace<float>(service.mode == ruka3::ServiceMotionMode::voltage ? service.target : 0.0F); return true;
-        case ParameterId::POS_SET: value.emplace<float>(service.mode == ruka3::ServiceMotionMode::position ? service.target : output.fused_angle); return true;
+        case ParameterId::POS_SET: value.emplace<float>((service.mode == ruka3::ServiceMotionMode::position || service.mode == ruka3::ServiceMotionMode::servo) ? service.goal : output.fused_angle); return true;
+        case ParameterId::CURRENT: value = service.mode == ruka3::ServiceMotionMode::current ? service.target : 0.0F; return true;
         default: break;
     }
     auto* motor = get_motor();
@@ -85,7 +90,7 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
                 output.encoder_prediction_error,
                 output.reversal_peak,
                 static_cast<float>(output.motor_direction),
-                output.expected_backlash_rad,
+                output.expected_backlash_rad, service.velocity, service.goal,
             });
             return true;
         }
@@ -93,13 +98,56 @@ bool read_parameter(ParameterId id, ParameterValue& value) {
         case ParameterId::CALIB_INVERTED: value.emplace<bool>(is_motor_encoder_inverted()); return true;
         case ParameterId::MOTOR_CALIB: value.emplace<bool>(is_motor_calibration_pending()); return true;
         case ParameterId::DRIVER_WAKE: value.emplace<bool>(is_driver_awake()); return true;
+        case ParameterId::DRIVER_DIAG: {
+            IntegerDiagnostics diag{};
+            diag[0] = HAL_GPIO_ReadPin(DRV_FAULT_GPIO_Port, DRV_FAULT_Pin);
+            diag[1] = motor->is_on(); diag[2] = is_driver_awake(); diag[3] = is_motor_calibrated();
+            diag[4] = std::numeric_limits<std::int32_t>::min();
+            diag[5] = TIM1->CR1; diag[6] = TIM1->CCER; diag[7] = TIM1->BDTR;
+            diag[8] = TIM1->CCR1; diag[9] = TIM1->CCR2; diag[10] = TIM1->CCR3;
+            value = diag; return true;
+        }
+        case ParameterId::ENCODER_DIAG: {
+            AngleDiagnostics diag; diag.fill(std::numeric_limits<float>::quiet_NaN());
+            CRITICAL_SECTION({
+                diag[6] = motor->get_rotor_encoder_value();
+                diag[7] = motor->get_preobserver_rotor_angle();
+                diag[8] = motor->get_electric_angle();
+                diag[11] = motor->get_encoder().CPR;
+            })
+            value = diag; return true;
+        }
+        case ParameterId::CURRENT_DIAG: {
+            AngleDiagnostics diag; diag.fill(std::numeric_limits<float>::quiet_NaN());
+            diag[0] = inverter.get_A(); diag[1] = inverter.get_B(); diag[2] = inverter.get_C();
+            diag[4] = motor->get_working_current();
+            diag[5] = joint_calibration_instance().core().blocks_normal_control()
+                ? ruka3::joint_profile(RUKA3_JOINT_INDEX).position_direction * calibration_current_target()
+                : service.mode == ruka3::ServiceMotionMode::current ? service.target : 0;
+            diag[8] = motor->get_voltage(); diag[9] = inverter.get_A() + inverter.get_B() + inverter.get_C();
+            diag[17] = ruka3::joint_profile(RUKA3_JOINT_INDEX).motor.current_limit;
+            diag[18] = service.mode == ruka3::ServiceMotionMode::current ? 5 :
+                service.mode == ruka3::ServiceMotionMode::voltage ? 3 : 4;
+            diag[19] = motor->is_on(); diag[20] = command.age_ms;
+            diag[21] = diag[4] * ruka3::joint_profile(RUKA3_JOINT_INDEX).position_direction;
+            diag[22] = ruka3::joint_profile(RUKA3_JOINT_INDEX).motor.control_period_s;
+            diag[23] = ruka3::joint_profile(RUKA3_JOINT_INDEX).motor_command_sign;
+            value = diag; return true;
+        }
         default: return false;
     }
 }
 
-ParameterWriteResult write_runtime_parameter(ParameterId id, const ParameterValue& value) {
+[[gnu::noinline]] ParameterWriteResult write_board_parameter(ParameterId id, const ParameterValue& value) {
     if (id == ParameterId::BOOTLOADER) {
         bootloader_reboot_pending |= std::get<bool>(value);
+        return ParameterWriteResult::OK;
+    }
+    if (id == ParameterId::RESET) {
+        if (!std::get<bool>(value)) return ParameterWriteResult::INVALID;
+        (void)set_motor_enabled(false);
+        if (!reset_pending) reset_requested_at = millis_32();
+        reset_pending = true;
         return ParameterWriteResult::OK;
     }
     if (id == ParameterId::FAULT_ACK) {
@@ -118,6 +166,9 @@ ParameterWriteResult write_runtime_parameter(ParameterId id, const ParameterValu
     }
     if (id == ParameterId::MOVE) {
         return service_set_voltage(std::get<float>(value)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    }
+    if (id == ParameterId::CURRENT) {
+        return service_set_current(std::get<float>(value)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
     }
     if (id == ParameterId::POS_SET) {
         return service_set_position(std::get<float>(value)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;

@@ -18,10 +18,10 @@ protected:
     arm_atomic(int) revolutions = 0;
     arm_atomic(encoder_data) value = 0;
 public:
-    const int electric_offset = 0;
+    int electric_offset = 0;
     const encoder_data CPR;
     const bool is_electrical = false;
-    const bool is_inverted = false;
+    bool is_inverted = false;
 
     GenericEncoder(
         encoder_data CPR,

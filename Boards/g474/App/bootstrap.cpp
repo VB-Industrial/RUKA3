@@ -160,7 +160,7 @@ void read_network_timeout_ms(
     __HAL_RCC_PWR_CLK_ENABLE();
     HAL_PWR_EnableBkUpAccess();
     TAMP->BKP0R = kBootRequestMagic;
-    TAMP->BKP1R = 0U;
+    TAMP->BKP1R = ruka3::protocol::boot_transport_1m4(kProfile.node_id);
     TAMP->BKP2R = 0U;
     HAL_PWR_DisableBkUpAccess();
     NVIC_SystemReset();
@@ -234,10 +234,10 @@ void publish_safe_state() {
     );
     registers_handler.create(
         std::array<RegisterDefinition, 4>{{
-            {"get_node_id", read_node_id},
-            {"set_bootloader", request_bootloader},
-            {"get_net_online", read_network_online},
-            {"get_net_timeout", read_network_timeout_ms},
+            {"node_id", read_node_id},
+            {"bootloader", request_bootloader},
+            {"net_online", read_network_online},
+            {"net_timeout", read_network_timeout_ms},
         }},
         interface
     );
