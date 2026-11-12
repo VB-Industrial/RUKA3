@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="ruka3">
+  <xacro:include filename="$(find ruka3_description)/urdf/ruka3_macro.urdf.xacro"/>
+  <xacro:include filename="$(find ruka3_control)/ros2_control/ruka3.ros2_control.xacro"/>
+
+  <xacro:arg
+    name="initial_positions_file"
+    default="$(find ruka3_control)/config/initial_positions.yaml"/>
+  <xacro:arg name="use_mock_hardware" default="true"/>
+  <xacro:arg name="can_interface" default="can0"/>
+  <xacro:arg name="feedback_timeout" default="0.25"/>
+  <xacro:arg name="heartbeat_timeout" default="2.5"/>
+  <xacro:arg name="activation_timeout" default="5.0"/>
+
+  <xacro:ruka3_model/>
+  <xacro:ruka3_ros2_control
+    name="Ruka3System"
+    initial_positions_file="$(arg initial_positions_file)"
+    use_mock_hardware="$(arg use_mock_hardware)"
+    can_interface="$(arg can_interface)"
+    feedback_timeout="$(arg feedback_timeout)"
+    heartbeat_timeout="$(arg heartbeat_timeout)"
+    activation_timeout="$(arg activation_timeout)"/>
+</robot>

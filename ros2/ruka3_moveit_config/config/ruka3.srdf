@@ -1,0 +1,46 @@
+<robot name="ruka3">
+  <group name="ruka3_arm">
+    <chain base_link="base_link" tip_link="link_06" />
+  </group>
+  <group_state name="home" group="ruka3_arm">
+    <joint name="joint_1" value="0.0" />
+    <joint name="joint_2" value="0.0" />
+    <joint name="joint_3" value="0.0" />
+    <joint name="joint_4" value="0.0" />
+    <joint name="joint_5" value="0.0" />
+    <joint name="joint_6" value="0.0" />
+  </group_state>
+  <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="base_link" />
+  <disable_collisions link1="base_link" link2="link_01" reason="Adjacent" />
+  <disable_collisions link1="base_link" link2="link_02" reason="Never" />
+  <disable_collisions link1="link_01" link2="link_02" reason="Adjacent" />
+  <disable_collisions link1="link_01" link2="link_02_mim" reason="Never" />
+  <disable_collisions link1="link_01" link2="link_02_par" reason="Default" />
+  <disable_collisions link1="link_01" link2="link_03_mim" reason="Adjacent" />
+  <disable_collisions link1="link_02" link2="link_02_mim" reason="Adjacent" />
+  <disable_collisions link1="link_02" link2="link_02_par" reason="Adjacent" />
+  <disable_collisions link1="link_02" link2="link_03" reason="Never" />
+  <disable_collisions link1="link_02" link2="link_03_mim" reason="Never" />
+  <disable_collisions link1="link_02" link2="link_04" reason="Never" />
+  <disable_collisions link1="link_02" link2="link_05" reason="Never" />
+  <disable_collisions link1="link_02" link2="link_06" reason="Never" />
+  <disable_collisions link1="link_02_mim" link2="link_02_par" reason="Never" />
+  <disable_collisions link1="link_02_mim" link2="link_03" reason="Adjacent" />
+  <disable_collisions link1="link_02_mim" link2="link_03_mim" reason="Never" />
+  <disable_collisions link1="link_02_mim" link2="link_04" reason="Never" />
+  <disable_collisions link1="link_02_mim" link2="link_05" reason="Never" />
+  <disable_collisions link1="link_02_mim" link2="link_06" reason="Never" />
+  <disable_collisions link1="link_02_par" link2="link_03" reason="Never" />
+  <disable_collisions link1="link_02_par" link2="link_03_mim" reason="Default" />
+  <disable_collisions link1="link_02_par" link2="link_04" reason="Never" />
+  <disable_collisions link1="link_02_par" link2="link_05" reason="Never" />
+  <disable_collisions link1="link_02_par" link2="link_06" reason="Never" />
+  <disable_collisions link1="link_03" link2="link_04" reason="Adjacent" />
+  <disable_collisions link1="link_03" link2="link_05" reason="Never" />
+  <disable_collisions link1="link_03" link2="link_06" reason="Never" />
+  <disable_collisions link1="link_03_mim" link2="link_05" reason="Never" />
+  <disable_collisions link1="link_03_mim" link2="link_06" reason="Never" />
+  <disable_collisions link1="link_04" link2="link_05" reason="Adjacent" />
+  <disable_collisions link1="link_04" link2="link_06" reason="Default" />
+  <disable_collisions link1="link_05" link2="link_06" reason="Adjacent" />
+</robot>

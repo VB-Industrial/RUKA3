@@ -1,0 +1,39 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+arm_controller:
+  ros__parameters:
+    joints:
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+      - joint_5
+      - joint_6
+    command_interfaces:
+      - position
+      - velocity
+    state_interfaces:
+      - position
+      - velocity
+    # Keep the hardware's explicit zero command on activation.
+    # Feedback remains measured and is still used for trajectory tolerances.
+    open_loop_control: true
+    allow_partial_joints_goal: false
+    allow_nonzero_velocity_at_trajectory_end: false
+    constraints:
+      stopped_velocity_tolerance: 0.02
+      goal_time: 2.0
+      joint_1: {trajectory: 0.15, goal: 0.03}
+      joint_2: {trajectory: 0.15, goal: 0.03}
+      joint_3: {trajectory: 0.15, goal: 0.03}
+      joint_4: {trajectory: 0.15, goal: 0.03}
+      joint_5: {trajectory: 0.15, goal: 0.03}
+      joint_6: {trajectory: 0.15, goal: 0.03}
