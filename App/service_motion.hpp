@@ -149,7 +149,12 @@ public:
         target = soft_limited_target(target, current, limits);
         const bool same_goal = state_.mode == ServiceMotionMode::servo && state_.goal == target;
         if (!same_goal) {
-            if (std::fabs(target-current) > tuning_.acquire_threshold_rad) {
+            // A ROS trajectory already supplies small, continuous reference
+            // steps. Do not restart acquisition from the measured angle on
+            // every packet when a loaded joint lags behind that reference.
+            const bool stream_step = state_.mode == ServiceMotionMode::servo &&
+                std::fabs(target-state_.goal) <= tuning_.acquire_threshold_rad;
+            if (!stream_step && std::fabs(target-current) > tuning_.acquire_threshold_rad) {
                 // Reuse the set_pos planner, but retain stream watchdog semantics.
                 position(target, current, limits, now);
             } else {

@@ -108,6 +108,23 @@ int main() {
         assert(stream.position(sign*.01F,0,l,2230));
         assert(stream.trajectory_active() && stream.autonomous_motion_active());
     }
+    // ROS already supplies a sampled trajectory. A loaded stationary axis may
+    // lag by >0.1 rad; small changes of its reference must retain P stiffness.
+    for (float sign : {-1.0F, 1.0F}) {
+        ServiceMotion loaded(kG431CommandTuning, 2);
+        const float measured = sign*.2F;
+        assert(loaded.servo(0,0,0,30,0,measured,l,0));
+        loaded.update(0,measured,l);
+        assert(loaded.trajectory_active()); // First far target still acquires smoothly.
+        for (unsigned t=10;t<=200;t+=10) {
+            const float reference = -sign*.00001F*t;
+            assert(loaded.servo(reference,-sign*.001F,0,30,0,measured,l,t));
+            loaded.update(t,measured,l);
+            assert(near(loaded.snapshot().target,reference));
+            assert(std::fabs(loaded.snapshot().error) >= .2F);
+            assert(loaded.snapshot().kp == 30);
+        }
+    }
     // Runtime register gains belong to position/hold; packet gains belong to the stream.
     ServiceMotion gains(kJ4CommandTuning);
     assert(gains.position_kp()==kJ4CommandTuning.default_position_kp && gains.position_kd()==0);
