@@ -65,9 +65,7 @@ void update_service_motion() {
     const auto now = HAL_GetTick();
     const auto& output = output_observer.snapshot();
     const auto& limits = mechanical_calibration.snapshot();
-    const bool was_running = service_controller.autonomous_motion_active();
     if (!service_controller.update(now, output.fused_angle, limits)) return;
-    if (was_running && !service_controller.autonomous_motion_active()) commands.complete_autonomous_command(now);
     if (service_motion.mode == ruka3::ServiceMotionMode::voltage) {
         motor.set_voltage_point(direction * profile.motor_command_sign * service_motion.target *
             ruka3::outward_command_scale(service_motion.target, output.fused_angle, limits));

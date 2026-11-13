@@ -267,9 +267,7 @@ static void update_service_motion() {
     const auto now = millis_32();
     const auto& output = output_observer.snapshot();
     const auto& limits = mechanical_calibration.snapshot();
-    const bool was_running = service_controller.autonomous_motion_active();
     if (!service_controller.update(now, output.fused_angle, limits)) return;
-    if (was_running && !service_controller.autonomous_motion_active()) command_supervisor.complete_autonomous_command(now);
     constexpr auto& profile = ruka3::joint_profile(RUKA3_JOINT_INDEX);
     bool valid;
     CRITICAL_SECTION({

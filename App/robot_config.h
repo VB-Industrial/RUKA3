@@ -185,8 +185,8 @@ inline constexpr MotorProfile kG474MotorProfile{
     // TIM1: 160 MHz / ((PSC=4)+1) / ((ARR=1999)+1) = 16 kHz.
     .control_period_s = 0.0000625F, .torque_const = 0.011F,
     // User-selected provisional limits for J1-J4; not verified nameplate ratings.
-    .current_limit = 22.0F, .nominal_current = 3.0F, .torque_limit = 10.0F, .max_voltage = 50.0F,
-    .stall_current = 3.0F, .stall_timeout_s = 3.0F, .stall_tolerance = 0.2F,
+    .current_limit = 22.0F, .nominal_current = 10.0F, .torque_limit = 10.0F, .max_voltage = 50.0F,
+    .stall_current = 10.0F, .stall_timeout_s = 3.0F, .stall_tolerance = 0.2F,
     .calibration_voltage = 1.0F, .current_pid_kp = 2.0F, .current_pid_ki = 600.0F,
     .current_pid_kd = 0.0F, .filter_expected_a = 0.0F,
     .filter_g1 = 0.015700989410003974F, .filter_g2 = 3.925227776360174F,
@@ -214,12 +214,12 @@ static_assert(kG474CommissioningVoltageLimitV > 0.0F &&
 static_assert(kG474PhaseOvercurrentTripA > kG474CommissioningCurrentLimitA &&
               kG474PhaseOvercurrentTripA <= kG474MotorProfile.current_limit);
 
-// J5/J6 preserve the presently commissioned 2 A limit.  The remaining values
-// are the prior VBDrive defaults, now fixed in the robot profile rather than
-// read from EEPROM.
+// J5/J6: user-selected 6 A control ceiling, including stationary holding.
+// torque_limit follows the existing Kt=1 scale so it does not impose a second
+// 3 A ceiling at gear=10. These are controller settings, not rated motor data.
 inline constexpr MotorProfile kG431MotorProfile{
     .control_period_s = 0.000025F, .torque_const = 1.0F,
-    .current_limit = 2.0F, .nominal_current = 2.0F, .torque_limit = 30.0F, .max_voltage = 50.0F,
+    .current_limit = 6.0F, .nominal_current = 6.0F, .torque_limit = 60.0F, .max_voltage = 50.0F,
     .stall_current = 6.0F, .stall_timeout_s = 3.0F, .stall_tolerance = 0.2F,
     .calibration_voltage = 0.2F, .current_pid_kp = 4.0F, .current_pid_ki = 1600.0F,
     .current_pid_kd = 0.0F, .filter_expected_a = 0.0F,
@@ -235,7 +235,7 @@ inline constexpr JointProfile kJointProfiles[] = {
     {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
     {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
     {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kJ4CommandTuning, kJ4ObserverProfile, kDefaultCommunicationProfile},
-    {5, Board::g431, 105, 1001, 1125, 1135, 10.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
+    {5, Board::g431, 105, 1001, 1125, 1135, 10.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, -1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
     {6, Board::g431, 106, 1001, 1126, 1136, 10.0F,  1,  1,  1,    0, 52076, -1, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kJ6ObserverProfile, kDefaultCommunicationProfile},
 };
 

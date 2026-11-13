@@ -26,8 +26,6 @@ public:
     }
 
     // Returns true once on the transition into timeout.
-    void complete_autonomous_command(std::uint32_t now_ms) { last_command_ms_ = now_ms; }
-
     bool update(std::uint32_t now_ms, bool autonomous_motion = false) {
         if (!initialized_) initialize(now_ms, timeout_ms_);
         snapshot_.age_ms = now_ms - last_command_ms_;

@@ -52,7 +52,7 @@ inline float soft_limited_target(float target, float position, const MechanicalC
 }
 
 // Shared G431/G474 application motion state. Trajectory ticks never block CAN.
-// A finite set_pos owns its deadline; incoming commands cancel/replace it.
+// A finite set_pos owns its trajectory and final hold; incoming commands replace it.
 class ServiceMotion {
 public:
     explicit ServiceMotion(const CommandTuning& tuning, float holding_current_limit = 0) : tuning_(tuning),
@@ -105,7 +105,8 @@ public:
         return integral_current_*outward_command_scale(integral_current_, position, limits);
     }
     bool trajectory_active() const { return trajectory_active_; }
-    bool autonomous_motion_active() const { return state_.mode == ServiceMotionMode::position && trajectory_active_; }
+    // A register set_pos remains autonomous while holding its final target.
+    bool autonomous_motion_active() const { return state_.mode == ServiceMotionMode::position; }
     void cancel(bool reset_integral = true) {
         state_ = {}; trajectory_active_ = false;
         if (reset_integral) { integral_current_ = 0; integral_clock_valid_ = false; }
@@ -147,24 +148,24 @@ public:
         if (!valid_position(target, limits) || !std::isfinite(velocity) || !std::isfinite(torque) ||
             !std::isfinite(kp) || !std::isfinite(kd) || kp < 0 || kd < 0) return false;
         target = soft_limited_target(target, current, limits);
-        const bool same_goal = state_.mode == ServiceMotionMode::servo && state_.goal == target;
-        if (!same_goal) {
-            // A ROS trajectory already supplies small, continuous reference
-            // steps. Do not restart acquisition from the measured angle on
-            // every packet when a loaded joint lags behind that reference.
-            const bool stream_step = state_.mode == ServiceMotionMode::servo &&
-                std::fabs(target-state_.goal) <= tuning_.acquire_threshold_rad;
-            if (!stream_step && std::fabs(target-current) > tuning_.acquire_threshold_rad) {
-                // Reuse the set_pos planner, but retain stream watchdog semantics.
+        const bool acquiring = state_.mode == ServiceMotionMode::servo && trajectory_active_;
+        if (!acquiring) {
+            const bool new_goal = state_.mode != ServiceMotionMode::servo ||
+                std::fabs(target-state_.goal) > tuning_.acquire_threshold_rad;
+            if (new_goal && std::fabs(target-current) > tuning_.acquire_threshold_rad) {
+                // Capture only initial/discontinuous far references. Residual
+                // tracking error must retain PD torque after capture, rather
+                // than restarting a ramp from the measured position.
                 position(target, current, limits, now);
             } else {
-                cancel(false); state_.target = state_.goal = target;
+                cancel(false); state_.target = target;
             }
-            state_.mode = ServiceMotionMode::servo;
         }
+        state_.mode = ServiceMotionMode::servo;
+        state_.goal = target; // Latest packet; the capture endpoint stays in start_/distance_.
         requested_velocity_ = velocity; requested_torque_ = torque;
         state_.kp = kp; state_.kd = kd;
-        // A stream profile ticks at the configured rate even with faster packets.
+        // Direct packets apply immediately; an active capture retains its tick clock.
         if (!trajectory_active_) last_update_ = now - period_ms();
         return true;
     }

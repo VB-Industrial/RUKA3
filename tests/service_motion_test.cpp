@@ -108,22 +108,116 @@ int main() {
         assert(stream.position(sign*.01F,0,l,2230));
         assert(stream.trajectory_active() && stream.autonomous_motion_active());
     }
-    // ROS already supplies a sampled trajectory. A loaded stationary axis may
-    // lag by >0.1 rad; small changes of its reference must retain P stiffness.
-    for (float sign : {-1.0F, 1.0F}) {
-        ServiceMotion loaded(kG431CommandTuning, 2);
-        const float measured = sign*.2F;
-        assert(loaded.servo(0,0,0,30,0,measured,l,0));
-        loaded.update(0,measured,l);
-        assert(loaded.trajectory_active()); // First far target still acquires smoothly.
-        for (unsigned t=10;t<=200;t+=10) {
-            const float reference = -sign*.00001F*t;
-            assert(loaded.servo(reference,-sign*.001F,0,30,0,measured,l,t));
-            loaded.update(t,measured,l);
-            assert(near(loaded.snapshot().target,reference));
-            assert(std::fabs(loaded.snapshot().error) >= .2F);
-            assert(loaded.snapshot().kp == 30);
+    // Capture is not cancelled or restarted by small ROS reference steps.
+    // After the capture ends, packets go straight to PD even if the axis still lags.
+    for (unsigned joint=1; joint<=6; ++joint) for (float sign : {-1.0F, 1.0F}) {
+        const auto& tuning=joint_profile(joint).command;
+        ServiceMotion stream(tuning,2);
+        const float start=sign*.2F;
+        assert(stream.set_integral(.2F,.5F));
+        stream.hold(start,0);stream.update(0,start-.01F,l);
+        stream.compensate_load(0,start-.01F,0,2,l);
+        stream.compensate_load(100,start-.01F,0,2,l);
+        const float learned=stream.integral_current();assert(learned>0);
+        assert(stream.servo(0,0,0,3,.02F,start,l,100));
+        for(unsigned elapsed=0;elapsed<=200;elapsed+=10) {
+            const float reference=-sign*.00001F*elapsed;
+            assert(stream.servo(reference,-sign*.001F,0,3,.02F,start,l,100+elapsed));
+            stream.update(100+elapsed,start,l);
+            assert(stream.trajectory_active());
+            // This is the original acceleration, not a new ramp or a direct jump.
+            assert(near(stream.snapshot().target,start-sign*.5F*elapsed*elapsed*.000001F));
+            assert(near(stream.integral_current(),learned));
         }
+        stream.update(1100,0,l);assert(!stream.trajectory_active());
+        // Direct sampled motion, reversal, repeated position and changed velocity.
+        for(unsigned t=1110;t<=1210;t+=10) {
+            const float q=sign*.0001F*(t-1110);
+            const float v=t<1160?sign*.01F:-sign*.01F;
+            assert(stream.servo(q,v,.03F,3,.02F,q-sign*.02F,l,t));
+            assert(stream.update(t,q-sign*.02F,l));
+            assert(!stream.trajectory_active());
+            assert(near(stream.snapshot().target,q));
+            assert(near(stream.snapshot().velocity,v));
+            assert(near(position_current_request(stream.snapshot(),0,1,1),3*sign*.02F+.02F*v+.03F));
+            assert(near(stream.integral_current(),learned));
+        }
+        // v_ref=0 still corrects a position error; no prediction between packets.
+        assert(stream.servo(.02F,0,0,3,.02F,0,l,1220));stream.update(1220,0,l);
+        assert(near(position_current_request(stream.snapshot(),0,1,1),.06F));
+        stream.update(1500,0,l);assert(near(stream.snapshot().target,.02F));
+        // Residual lag cannot repeatedly erase position error and holding torque.
+        assert(stream.servo(.021F,.01F,0,3,.02F,-.2F,l,1510));
+        stream.update(1510,-.2F,l);
+        assert(!stream.trajectory_active());
+        assert(near(stream.snapshot().target,.021F));
+        // A new discontinuous far command still captures once.
+        assert(stream.servo(.8F,0,0,3,.02F,-.2F,l,1520));
+        assert(stream.trajectory_active());
+        stream.hold(-.2F,2520);stream.update(2520,-.2F,l);
+        assert(!stream.trajectory_active() && stream.snapshot().velocity==0);
+        assert(near(stream.integral_current(),learned));
+    }
+    // Regression from J5: constant ROS target, loaded/stalled axis >0.1 rad away.
+    // Completing acquisition must not start another ramp every ~0.8 seconds.
+    for(unsigned joint=1;joint<=6;++joint) for(float sign:{-1.0F,1.0F}) {
+        ServiceMotion stream(joint_profile(joint).command,2);
+        const float measured=sign*.2F;
+        assert(stream.servo(0,0,0,30,0,measured,l,0));
+        stream.update(1000,measured,l);
+        assert(!stream.trajectory_active());
+        for(unsigned t=1010;t<=20000;t+=10) {
+            assert(stream.servo(0,0,0,30,0,measured,l,t));
+            stream.update(t,measured,l);
+            assert(!stream.trajectory_active());
+            assert(stream.snapshot().target==0 && stream.snapshot().velocity==0);
+            assert(near(stream.snapshot().error,-measured));
+            assert(near(position_current_request(stream.snapshot(),0,1,1),-30*measured));
+        }
+        // Continuous samples retain full feedback despite persistent lag.
+        for(unsigned t=20010;t<=21000;t+=10) {
+            const float goal=sign*(t-20000)*.00001F;
+            assert(stream.servo(goal,sign*.01F,0,30,.02F,measured,l,t));
+            stream.update(t,measured,l);
+            assert(!stream.trajectory_active() && near(stream.snapshot().target,goal));
+            assert(near(stream.snapshot().velocity,sign*.01F));
+        }
+        // Watchdog hold ends that stream; the next far initial goal captures again.
+        stream.hold(measured,22001);stream.update(22001,measured,l);
+        assert(stream.servo(0,0,0,30,0,measured,l,22010));
+        assert(stream.trajectory_active() && !stream.autonomous_motion_active());
+    }
+    // A finite set_pos owns its final target as well as the trajectory.
+    // Reproduce J5 sag after completion; watchdog must not adopt the sagged angle.
+    for(unsigned joint=1;joint<=6;++joint) for(float sign:{-1.0F,1.0F}) {
+        ServiceMotion motion(joint_profile(joint).command,2);
+        CommandSupervisor watchdog;watchdog.initialize(0,1000);
+        assert(motion.position(sign*.3F,0,l,0));watchdog.note_accepted_command(0);
+        for(unsigned t=0;t<=10000;t+=10) {
+            const float measured=t<1200?0:sign*.15F;
+            motion.update(t,measured,l);
+            if(watchdog.update(t,motion.autonomous_motion_active())) motion.hold(measured,t);
+            if(t>=1200) {
+                assert(!motion.trajectory_active());
+                assert(motion.snapshot().mode==ServiceMotionMode::position);
+                assert(near(motion.snapshot().target,sign*.3F));
+                assert(near(motion.snapshot().error,sign*.15F));
+                assert(!watchdog.snapshot().timed_out);
+            }
+        }
+        // A stream then loses its lease and captures actual position instead.
+        assert(motion.servo(sign*.2F,0,0,5,0,sign*.15F,l,10010));
+        watchdog.note_accepted_command(10010);
+        assert(!watchdog.update(11010,motion.autonomous_motion_active()));
+        assert(watchdog.update(11011,motion.autonomous_motion_active()));
+        motion.hold(sign*.17F,11011);motion.update(11011,sign*.17F,l);
+        assert(near(motion.snapshot().target,sign*.17F));
+        assert(motion.snapshot().mode==ServiceMotionMode::hold);
+        // Direct debug modes retain the normal command timeout as well.
+        assert(motion.direct(ServiceMotionMode::current,.1F,6,l,12000));
+        watchdog.note_accepted_command(12000);
+        assert(!watchdog.update(12000,motion.autonomous_motion_active()));
+        assert(watchdog.update(13001,motion.autonomous_motion_active()));
     }
     // Runtime register gains belong to position/hold; packet gains belong to the stream.
     ServiceMotion gains(kJ4CommandTuning);
@@ -275,9 +369,9 @@ int main() {
     }
     CommandSupervisor supervisor; supervisor.initialize(0,1000); supervisor.note_accepted_command(0);
     assert(!supervisor.update(2000,true));
-    supervisor.complete_autonomous_command(2500);
+    supervisor.note_accepted_command(2500);
     assert(!supervisor.update(3000)); assert(supervisor.update(3501));
-    assert(supervisor.snapshot().accepted_count==1);
+    assert(supervisor.snapshot().accepted_count==2);
     m.hold(.4F,3501);m.update(3501,.4F,l); assert(near(m.snapshot().target,.4F));
     m.cancel(); assert(!m.update(4000,0,l));
     // The J4 encoder correction has a persistent 10% weight, not a slower 100% pull.
