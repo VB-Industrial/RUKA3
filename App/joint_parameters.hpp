@@ -18,6 +18,10 @@ enum class ParameterId : std::uint8_t {
     MAN_CAL, MOVE_CAL, CAL_DATA, CAL_DIAG, LUFT_CAL, VERSION, LIMITS, CONTROL_DIAG,
     DRIVER_DIAG, BOOT_DIAG, CYPHAL_DIAG, ENCODER_DIAG, EEPROM_DIAG, FAULT_HISTORY,
     MOTOR_POS, CURRENT, CURRENT_DIAG, EL_OFFSET, ENCODER_CPR, POSITION_KP, POSITION_KD, ACTIVE_GAINS, POSITION_KI, INTEGRAL_LIMIT, INTEGRAL_CURRENT,
+#ifdef RUKA3_FOC_TRACE
+    FOC_TRACE_COMMAND, FOC_TRACE_INFO, FOC_TRACE_PAGE, FOC_TRACE_DATA, FOC_TRACE_D_PULSE,
+#endif
+    PROFILE_VELOCITY, PROFILE_ACCELERATION,
 };
 
 struct ParameterDefinition {
@@ -101,6 +105,15 @@ inline constexpr auto PARAMETER_CATALOG = std::to_array<ParameterDefinition>({
     {ParameterId::POSITION_KI, "ki", ParameterType::REAL32, true, false},
     {ParameterId::INTEGRAL_LIMIT, "i_limit", ParameterType::REAL32, true, false},
     {ParameterId::INTEGRAL_CURRENT, "i_current", ParameterType::REAL32, false, false},
+    {ParameterId::PROFILE_VELOCITY, "pos_v", ParameterType::REAL32, true, false},
+    {ParameterId::PROFILE_ACCELERATION, "pos_a", ParameterType::REAL32, true, false},
+#ifdef RUKA3_FOC_TRACE
+    {ParameterId::FOC_TRACE_D_PULSE, "trace_d_pulse", ParameterType::REAL32, true, false},
+    {ParameterId::FOC_TRACE_COMMAND, "foc_trace", ParameterType::INTEGER32, true, false},
+    {ParameterId::FOC_TRACE_INFO, "trace_info", ParameterType::INTEGER32_ARRAY, false, false, 32},
+    {ParameterId::FOC_TRACE_PAGE, "trace_page", ParameterType::INTEGER32, true, false},
+    {ParameterId::FOC_TRACE_DATA, "trace_data", ParameterType::INTEGER32_ARRAY, false, false, 32},
+#endif
 });
 consteval bool parameter_catalog_is_valid() {
     for (unsigned i = 0; i < PARAMETER_CATALOG.size(); ++i) {

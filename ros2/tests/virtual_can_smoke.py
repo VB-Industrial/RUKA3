@@ -17,6 +17,8 @@ from sensor_msgs.msg import JointState
 from control_msgs.msg import JointTrajectoryControllerState
 from std_msgs.msg import Bool
 from controller_manager_msgs.srv import ListControllers
+from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 
 root = Path(__file__).resolve().parents[2]
 log_dir = root / 'build/ros2-smoke'
@@ -56,6 +58,32 @@ try:
     # JTC must keep hardware's zero goal even when the actual state starts at 0.3.
     assert all(abs(x) < .001 for x in controller[-1].reference.positions), controller[-1]
     wait_for(lambda: abs(dict(zip(states[-1].name, states[-1].position))['joint_1']) < .03, 5)
+    gains = node.create_client(SetParameters, '/ruka3/set_gains')
+    assert gains.wait_for_service(timeout_sec=3)
+
+    def set_gains(values):
+        request = SetParameters.Request()
+        for name, value in values:
+            request.parameters.append(Parameter(name=name, value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE, double_value=value)))
+        future = gains.call_async(request)
+        rclpy.spin_until_future_complete(node, future, timeout_sec=3)
+        assert future.done()
+        return future.result().results
+
+    reply = set_gains([('joint_2.kp', 22.), ('joint_2.kd', .4), ('joint_2.ki', .2)])
+    assert all(x.successful for x in reply), reply
+    wait_for(lambda: 'packet_gains 1 22 0.4' in (log_dir/'joints.log').read_text(), 2)
+    reply = set_gains([('joint_9.kp', 1.), ('joint_2.kd', -1.), ('joint_2.kp', float('nan'))])
+    assert not any(x.successful for x in reply), reply
+    # An unanswered register RPC must not block the 100 Hz command/feedback stream.
+    count_before = len(states)
+    reply = set_gains([('joint_2.ki', .321)])
+    assert not reply[0].successful and 'timed out' in reply[0].reason, reply
+    assert len(states) > count_before + 10, (count_before, len(states))
+    reply = set_gains([('joint_2.ki', .2)])
+    assert reply[0].successful, reply
+    print('PASS: live per-joint gains, invalid requests, timeout without blocking control', flush=True)
     trajectory = ActionClient(node, FollowJointTrajectory, '/arm_controller/follow_joint_trajectory')
     assert trajectory.wait_for_server(timeout_sec=3)
     goal = FollowJointTrajectory.Goal()
@@ -73,13 +101,16 @@ try:
     rclpy.spin_until_future_complete(node, sent, timeout_sec=3)
     assert sent.result().accepted
     result = sent.result().get_result_async()
+    reply = set_gains([('joint_2.kp', 24.)])
+    assert reply[0].successful and not result.done(), reply
+    wait_for(lambda: 'packet_gains 1 24 0.4' in (log_dir/'joints.log').read_text(), 2)
     wait_for(lambda: any(x.data for x in recovery), 10)
     rclpy.spin_until_future_complete(node, result, timeout_sec=3)
     assert result.done() and result.result().status == GoalStatus.STATUS_CANCELED, result.result()
     print('Active trajectory cancelled by recovery supervisor', flush=True)
     wait_for(lambda: states and .785 < dict(zip(states[-1].name, states[-1].position))['joint_1'] < .80, 6)
     print('Soft-limit recovery reached inner boundary', flush=True)
-    wait_for(lambda: any(line.startswith('sample ') and float(line.split()[1]) > 13
+    wait_for(lambda: any(line.startswith('sample ') and float(line.split()[1]) > 17
         for line in (log_dir/'joints.log').read_text().splitlines()), 12)
     client = node.create_client(ListControllers, '/controller_manager/list_controllers')
     assert client.wait_for_service(timeout_sec=3)
@@ -91,12 +122,16 @@ try:
     print('Feedback loss deactivated trajectory controller:', names, flush=True)
     entries = (log_dir/'joints.log').read_text().splitlines()
     first = [x.split() for x in entries if x.startswith('first ')]
-    assert len(first)==6 and all(float(x[2])==0 and float(x[3])==30+int(x[1]) and abs(float(x[4])-.01*int(x[1]))<1e-5 for x in first), first
+    assert len(first)==6 and all(float(x[2])==0 and float(x[3])==10 and float(x[4])==0 for x in first), first
     samples = [list(map(float,x.split()[1:])) for x in entries if x.startswith('sample ')]
-    assert max(abs(x[2]) for x in samples if x[0]<3.5)<.001, samples[:20]
+    assert max(abs(x[2]) for x in samples if x[0]<7.5)<.001, samples[:20]
     # The stale startup trajectory is never resumed after returning to 0.79.
-    assert all(.785 < x[2] < .80 for x in samples if 8 < x[0] < 11), samples[-30:]
-    print('PASS: node mapping, RPC arm/limits, per-joint firmware gains, zero startup, JTC ownership, recovery latch, feedback timeout', flush=True)
+    assert all(.785 < x[2] < .80 for x in samples if 12 < x[0] < 15), samples[-30:]
+    assert all(f'gain {i} ki 0.1' in entries for i in range(6)), entries[:60]
+    packet_gains = [x.split() for x in entries if x.startswith('packet_gains ')]
+    assert all(x[2:] == ['10', '0'] for x in packet_gains if x[1] != '1'), packet_gains
+    assert 'gain 1 kp 22' in entries and 'gain 1 kd 0.4' in entries and 'gain 1 ki 0.2' in entries
+    print('PASS: node mapping, RPC arm/limits, startup gains, zero startup, JTC ownership, recovery latch, feedback timeout', flush=True)
     node.destroy_node()
     rclpy.shutdown()
 finally:

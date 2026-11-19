@@ -32,6 +32,21 @@ static void profile(float goal,std::uint32_t start) {
     assert(completed);
 }
 int main() {
+    {
+        ServiceMotion slow(kDefaultCommandTuning);auto bounds=limits();
+        assert(slow.set_profile_velocity(.05F));assert(slow.set_profile_acceleration(.2F));
+        assert(!slow.set_profile_velocity(0));assert(!slow.set_profile_acceleration(2));
+        assert(slow.position(.1F,0,bounds,0));
+        // Changing settings during a move must not distort the active profile.
+        assert(slow.set_profile_acceleration(.5F));
+        float previous=0;
+        for(unsigned t=0;t<=3000;t+=10) {
+            slow.update(t,0,bounds);const auto v=slow.snapshot().velocity;
+            assert(std::fabs(v)<=.05001F && std::fabs(v-previous)<=.00201F);previous=v;
+        }
+        assert(!slow.trajectory_active() && near(slow.snapshot().target,.1F));
+    }
+
     for(float d:{0.0F,.04F,-.04F,1.0F,-1.0F}) { profile(d,100); profile(d,0xFFFFFF00U); }
     auto l=limits(); ServiceMotion m(kJ4CommandTuning);
     assert(m.position(1,0,l,0));
@@ -256,9 +271,9 @@ int main() {
     // Load compensation is in amperes, independent of board Kt and gearing.
     for (float sign : {-1.0F, 1.0F}) {
         ServiceMotion load(kJ4CommandTuning, 3);
-        assert(load.position_ki()==0 && load.integral_current()==0 && load.integral_limit()==kJ4CommandTuning.default_integral_current_limit_a);
+        assert(load.position_ki()==kJ4CommandTuning.default_position_ki && load.integral_current()==0 && load.integral_limit()==kJ4CommandTuning.default_integral_current_limit_a);
         load.hold(0,0); load.update(0,-sign*.1F,l);
-        assert(load.compensate_load(0,-sign*.1F,0,3,l)==0); // Disabled by default.
+        assert(load.compensate_load(0,-sign*.1F,0,3,l)==0); // Initial call establishes the integration clock.
         assert(load.set_integral(1,.5F));
         for(unsigned t=10;t<=1000;t+=10) {
             load.update(t,-sign*.1F,l);
@@ -331,7 +346,7 @@ int main() {
     for (unsigned j=1; j<=6; ++j) {
         const auto& tuning=joint_profile(j).command;
         ServiceMotion boot(tuning,3);
-        assert(boot.position_kp()==5 && boot.position_kd()==0 && boot.position_ki()==0);
+        assert(boot.position_kp()==(j<=4?20:5) && boot.position_kd()==0 && boot.position_ki()==(j<=4?2:0));
     }
     // Public Kp=3 requests 0.3 Nm for a 0.1 rad output error on every joint.
     for (unsigned j=1; j<=6; ++j) {
@@ -374,9 +389,10 @@ int main() {
     assert(supervisor.snapshot().accepted_count==2);
     m.hold(.4F,3501);m.update(3501,.4F,l); assert(near(m.snapshot().target,.4F));
     m.cancel(); assert(!m.update(4000,0,l));
-    // The J4 encoder correction has a persistent 10% weight, not a slower 100% pull.
+    // J1/J4 encoder correction is a persistent 10% weight, not a slower 100% pull.
     assert(kJ4ObserverProfile.fusion_encoder_weight==.1F);
-    for(unsigned joint:{1U,2U,3U,5U,6U}) assert(joint_profile(joint).observer.fusion_encoder_weight==1);
+    assert(kJ1ObserverProfile.fusion_encoder_weight==.1F);
+    for(unsigned joint:{2U,3U,5U,6U}) assert(joint_profile(joint).observer.fusion_encoder_weight==1);
     constexpr float tick_rad=6.28318530718F/16384;
     for(float weight:{0.0F,.1F,1.0F}) for(int sign:{-1,1}) {
         OutputStateObserver obs({16384,0,static_cast<std::int8_t>(sign),.1F,2,0,weight});

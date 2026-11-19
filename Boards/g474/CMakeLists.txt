@@ -15,6 +15,21 @@ set(DEFAULT_FIRMWARE_COMPILE_DEFINITIONS "ARM_MATH_CM4;STM32G4;STM32_G;MONITOR")
 set(FIRMWARE_COMPILE_DEFINITIONS "${DEFAULT_FIRMWARE_COMPILE_DEFINITIONS}" CACHE STRING "Project compile definitions")
 set(RUKA3_JOINT_INDEX "1" CACHE STRING "RUKA3 joint index (1..4 for STM32G474)")
 option(RUKA3_BOOTSTRAP "Build the safe CAN-only commissioning application" ON)
+option(RUKA3_FOC_TRACE "Build isolated G474 ISR recorder (no motor actions)" OFF)
+set(RUKA3_FOC_TRACE_FRAMES 256 CACHE STRING "FOC recorder frames, 128 bytes each")
+set(RUKA3_FOC_TRACE_DECIMATION 1 CACHE STRING "Record each Nth ISR; 1 keeps full rate")
+if(RUKA3_FOC_TRACE)
+    if(RUKA3_BOOTSTRAP)
+        message(FATAL_ERROR "FOC trace requires the full application")
+    endif()
+    if(NOT RUKA3_FOC_TRACE_FRAMES MATCHES "^[0-9]+$" OR RUKA3_FOC_TRACE_FRAMES LESS 1 OR RUKA3_FOC_TRACE_FRAMES GREATER 256)
+        message(FATAL_ERROR "FOC trace capacity must be 1..256 frames")
+    endif()
+    if(NOT RUKA3_FOC_TRACE_DECIMATION MATCHES "^[0-9]+$" OR RUKA3_FOC_TRACE_DECIMATION LESS 1 OR RUKA3_FOC_TRACE_DECIMATION GREATER 1024)
+        message(FATAL_ERROR "FOC trace decimation must be 1..1024")
+    endif()
+endif()
+
 
 if(NOT RUKA3_JOINT_INDEX MATCHES "^[1-4]$")
     message(FATAL_ERROR "STM32G474 target supports RUKA3_JOINT_INDEX 1..4")
@@ -112,6 +127,13 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     RUKA3_JOINT_INDEX=${RUKA3_JOINT_INDEX}
     $<$<BOOL:${RUKA3_BOOTSTRAP}>:RUKA3_BOOTSTRAP=1>
 )
+
+if(RUKA3_FOC_TRACE)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE RUKA3_FOC_TRACE=1
+        RUKA3_FOC_TRACE_FRAMES=${RUKA3_FOC_TRACE_FRAMES}
+        RUKA3_FOC_TRACE_DECIMATION=${RUKA3_FOC_TRACE_DECIMATION})
+    target_compile_definitions(${STM32CUBEMX_TARGET_NAME} INTERFACE RUKA3_FOC_TRACE=1)
+endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${STM32CUBEMX_TARGET_NAME}

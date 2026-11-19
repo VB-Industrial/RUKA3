@@ -58,7 +58,8 @@ public:
     explicit ServiceMotion(const CommandTuning& tuning, float holding_current_limit = 0) : tuning_(tuning),
         position_kp_(tuning.default_position_kp), position_kd_(tuning.default_velocity_kp),
         ki_(tuning.default_position_ki), integral_limit_(std::min(tuning.default_integral_current_limit_a, holding_current_limit)),
-        max_integral_(holding_current_limit) {}
+        max_integral_(holding_current_limit), profile_velocity_(tuning.service_position_velocity_rad_s),
+        profile_acceleration_(tuning.service_position_acceleration_rad_s2) {}
     const ServiceMotionSnapshot& snapshot() const { return state_; }
     float position_kp() const { return position_kp_; }
     float position_kd() const { return position_kd_; }
@@ -78,6 +79,16 @@ public:
         ki_ = ki; integral_limit_ = limit;
         integral_current_ = ki == 0 ? 0 : std::clamp(integral_current_, -limit, limit);
         return true;
+    }
+    float profile_velocity() const { return profile_velocity_; }
+    float profile_acceleration() const { return profile_acceleration_; }
+    bool set_profile_velocity(float value) {
+        if (!std::isfinite(value) || value <= 0 || value > tuning_.service_position_velocity_rad_s) return false;
+        profile_velocity_ = value; return true;
+    }
+    bool set_profile_acceleration(float value) {
+        if (!std::isfinite(value) || value <= 0 || value > tuning_.service_position_acceleration_rad_s2) return false;
+        profile_acceleration_ = value; return true;
     }
     // Called once per applied board setpoint. base_current is the public-sign
     // PD + feedforward request in amperes, before the motor's current limiter.
@@ -127,8 +138,8 @@ public:
         state_.kp = position_kp_; state_.kd = position_kd_;
         distance_ = std::fabs(target-current);
         sign_ = target >= current ? 1.0F : -1.0F;
-        const float v = tuning_.service_position_velocity_rad_s;
-        const float a = tuning_.service_position_acceleration_rad_s2;
+        const float v = profile_velocity_;
+        const float a = active_acceleration_ = profile_acceleration_;
         peak_velocity_ = std::min(v, std::sqrt(distance_*a));
         acceleration_time_ = peak_velocity_/a;
         cruise_time_ = peak_velocity_ > 0 ? std::max(0.0F, (distance_-peak_velocity_*acceleration_time_)/peak_velocity_) : 0;
@@ -176,7 +187,7 @@ public:
         if (state_.mode == ServiceMotionMode::servo) state_.torque = requested_torque_;
         if (state_.mode == ServiceMotionMode::position || trajectory_active_) {
             const float t = (now-started_)*0.001F;
-            const float a = tuning_.service_position_acceleration_rad_s2;
+            const float a = active_acceleration_;
             float travelled{}, velocity{};
             if (!trajectory_active_ || t >= duration_) {
                 travelled = distance_; trajectory_active_ = false;
@@ -218,6 +229,7 @@ private:
     const CommandTuning& tuning_;
     float position_kp_, position_kd_;
     float ki_, integral_limit_, max_integral_, integral_current_{};
+    float profile_velocity_, profile_acceleration_, active_acceleration_{};
     std::uint32_t integral_updated_{};
     bool integral_clock_valid_{};
     ServiceMotionSnapshot state_{};

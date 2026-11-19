@@ -1,4 +1,7 @@
 #include "app.h"
+#ifdef RUKA3_FOC_TRACE
+#include "foc_trace_hw.hpp"
+#endif
 #include "fdcan.h"
 #include "command_supervisor.hpp"
 #include "fault_manager.hpp"
@@ -165,6 +168,39 @@ bool read_board_parameter(ParameterId id, ParameterValue& value) {
     const auto& fault = faults.snapshot();
     const auto& can = can_monitor.snapshot();
     const auto& command = commands.snapshot();
+#ifdef RUKA3_FOC_TRACE
+    namespace trace=ruka3::foc_trace;
+    if(id==ParameterId::FOC_TRACE_D_PULSE) {value=trace::d_pulse.voltage();return true;}
+    if(id==ParameterId::FOC_TRACE_COMMAND) {
+        value=trace::recorder.state()==trace::State::capturing?static_cast<std::int32_t>(trace::recorder.profile()):0;
+        return true;
+    }
+    if(id==ParameterId::FOC_TRACE_PAGE) {value=static_cast<std::int32_t>(trace::selected_page);return true;}
+    if(id==ParameterId::FOC_TRACE_DATA) {
+        const auto* frame=trace::recorder.frame(trace::selected_page);
+        if(!frame) return false; // Never dump a ring being modified by the ISR.
+        IntegerDiagnostics a;
+        for(unsigned i=0;i<a.size();++i) a[i]=std::bit_cast<std::int32_t>(frame->words[i]);
+        value=a;return true;
+    }
+    if(id==ParameterId::FOC_TRACE_INFO) {
+        IntegerDiagnostics a{};
+        const auto fill=[&]() {
+            const auto& r=trace::recorder;
+            const std::uint32_t words[]={trace::magic,trace::schema,static_cast<std::uint32_t>(r.state()),
+                static_cast<std::uint32_t>(r.profile()),r.count(),RUKA3_FOC_TRACE_FRAMES,trace::words_per_frame,
+                r.period(),SystemCoreClock,SystemCoreClock/16000U,r.stride(),r.late_count,r.pending_count,
+                r.dma_changed_count,r.overrun_observations,r.dma_error_observations,r.max_cycles,r.max_interval,
+                trace::selected_page,r.capture_id,profile.motor.pole_pairs,TIM1->PSC,TIM1->ARR,TIM1->CCR4,
+                ADC12_COMMON->CCR,ADC1->CFGR,ADC1->SMPR1,DMA1_Channel1->CCR,
+                std::bit_cast<std::uint32_t>(profile.motor.current_lpf),
+                std::bit_cast<std::uint32_t>(profile.motor.filter_g3),profile.index,DWT->CTRL};
+            for(unsigned i=0;i<a.size();++i) a[i]=std::bit_cast<std::int32_t>(words[i]);
+        };
+        CRITICAL_SECTION({fill();})
+        value=a;return true;
+    }
+#endif
     switch (id) {
     case ParameterId::NODE_ID: value = std::uint32_t{profile.node_id}; return true;
     case ParameterId::ARM: value = joint.accepts_motor_commands() && motor.is_on(); return true;
@@ -272,6 +308,41 @@ bool read_board_parameter(ParameterId id, ParameterValue& value) {
 
 ParameterWriteResult write_board_parameter(ParameterId id, const ParameterValue& value) {
     auto& motor = get_motor();
+#ifdef RUKA3_FOC_TRACE
+    namespace trace=ruka3::foc_trace;
+    if(id==ParameterId::FOC_TRACE_D_PULSE) {
+        const auto volts=std::get<float>(value);bool ok=false;
+        CRITICAL_SECTION({
+            if(volts==0) {trace::d_pulse.cancel();trace::recorder.stop();ok=true;}
+            else if(joint.accepts_motor_commands() && motor.is_on() && !faults.snapshot().latched &&
+                service_motion.mode==ruka3::ServiceMotionMode::voltage && service_motion.target==0.0F &&
+                !trace::d_pulse.active() && trace::recorder.state()!=trace::State::capturing &&
+                RUKA3_FOC_TRACE_FRAMES==256 && RUKA3_FOC_TRACE_DECIMATION==1 && trace::d_pulse.arm(volts)) {
+                trace::recorder.arm(trace::Profile::measurement,false,1);trace::selected_page=0;ok=true;
+            }
+        })
+        return ok?ParameterWriteResult::OK:ParameterWriteResult::INVALID;
+    }
+    if(id==ParameterId::FOC_TRACE_COMMAND) {
+        if(trace::d_pulse.active()) return ParameterWriteResult::INVALID;
+        const auto command=std::get<std::int32_t>(value);bool ok=false;
+        CRITICAL_SECTION({
+            if(command==0) {trace::recorder.stop();ok=true;}
+            else if(command==-1) ok=trace::recorder.clear();
+            else if(command>=1 && command<=6) {
+                ok=trace::recorder.arm(static_cast<trace::Profile>((command-1)%3+1),command>=4,RUKA3_FOC_TRACE_DECIMATION);
+                if(ok) trace::selected_page=0;
+            }
+        })
+        return ok?ParameterWriteResult::OK:ParameterWriteResult::INVALID;
+    }
+    if(id==ParameterId::FOC_TRACE_PAGE) {
+        const auto page=std::get<std::int32_t>(value);
+        if(page<0 || !trace::recorder.frame(page)) return ParameterWriteResult::INVALID;
+        trace::selected_page=page;return ParameterWriteResult::OK;
+    }
+#endif
+
     if (id == ParameterId::ARM) return (std::get<bool>(value) ? arm() : (disarm(), true)) ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
     if (id == ParameterId::RESET || id == ParameterId::BOOTLOADER) {
         if (!std::get<bool>(value)) return ParameterWriteResult::INVALID;

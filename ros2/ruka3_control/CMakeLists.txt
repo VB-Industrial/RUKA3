@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 find_package(ament_cmake REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(hardware_interface REQUIRED)
@@ -21,6 +22,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(${PROJECT_NAME}
+  rcl_interfaces
   diagnostic_msgs
   std_msgs
   hardware_interface
@@ -52,7 +54,7 @@ install(
 
 
 ament_export_dependencies(
-  diagnostic_msgs hardware_interface pluginlib rclcpp rclcpp_lifecycle)
+  rcl_interfaces diagnostic_msgs hardware_interface pluginlib rclcpp rclcpp_lifecycle)
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 

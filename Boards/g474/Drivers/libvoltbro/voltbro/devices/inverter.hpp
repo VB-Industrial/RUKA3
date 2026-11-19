@@ -8,6 +8,9 @@
 #include <cstdint>
 #include <array>
 #include "phase_current_sense.hpp"
+#ifdef RUKA3_FOC_TRACE
+#include "foc_trace_hw.hpp"
+#endif
 
 
 #ifdef MONITOR
@@ -79,10 +82,25 @@ public:
     }
 
     void update() override {
+#ifdef RUKA3_FOC_TRACE
+        namespace trace=ruka3::foc_trace;
+        trace::sample_begin();
+        // Preserve original volatile-read order A/B/C/bus; do not latch/fix DMA.
+        I_A = sense.phase_current(trace::adc_word(1,ADC_buffer[1]), I_A_offset, 0);
+        I_B = sense.phase_current(trace::adc_word(2,ADC_buffer[2]), I_B_offset, 1);
+        I_C = sense.phase_current(trace::adc_word(3,ADC_buffer[3]), I_C_offset, 2);
+        busV = sense.bus_voltage_gain * sense.adc_voltage(trace::adc_word(0,ADC_buffer[0]));
+        trace::sample_end();
+        if(auto* r=trace::frame(trace::Profile::measurement)) {
+            r->f(16,I_A);r->f(17,I_B);r->f(18,I_C);r->f(19,I_A+I_B+I_C);
+            r->f(24,I_A_offset);r->f(25,I_B_offset);r->f(26,I_C_offset);r->f(27,busV);
+        }
+#else
         I_A = sense.phase_current(ADC_buffer[1], I_A_offset, 0);
         I_B = sense.phase_current(ADC_buffer[2], I_B_offset, 1);
         I_C = sense.phase_current(ADC_buffer[3], I_C_offset, 2);
         busV = sense.bus_voltage_gain * sense.adc_voltage(ADC_buffer[0]);
+#endif
         #ifdef MONITOR
             I_A_glob = I_A;
             I_B_glob = I_B;

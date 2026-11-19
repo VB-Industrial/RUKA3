@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <optional>
+#include "rcl_interfaces/srv/set_parameters.hpp"
 #include <thread>
 #include <linux/can.h>
 #include <linux/can/raw.h>
@@ -58,7 +60,30 @@ public:
   };
   std::array<Joint, kJointCount> joints{};
   std::array<CanardTransferID, kJointCount> command_ids{}, register_ids{};
+  std::array<double, kJointCount> kp{}, kd{};
+  bool tuning_enabled{};
   bool failed{};
+  void fail(const std::string & reason)
+  {
+    if (!failed) RCLCPP_ERROR(diagnostics_node_->get_logger(), "CAN failure: %s", reason.c_str());
+    failed = true;
+  }
+
+  void report_unhealthy(double feedback_timeout, double heartbeat_timeout) const
+  {
+    const auto now = micros();
+    for (size_t i = 0; i < kJointCount; ++i) {
+      const auto & j = joints[i];
+      if (now-j.feedback > feedback_timeout*1e6 || now-j.heartbeat > heartbeat_timeout*1e6 ||
+        j.fault || j.health >= uavcan_node_Health_1_0_CAUTION)
+      {
+        RCLCPP_ERROR(diagnostics_node_->get_logger(),
+          "joint_%zu: feedback age=%.3fs (limit %.3fs), heartbeat age=%.3fs (limit %.3fs), fault=%d health=%u",
+          i+1, (now-j.feedback)*1e-6, feedback_timeout, (now-j.heartbeat)*1e-6,
+          heartbeat_timeout, j.fault, unsigned(j.health));
+      }
+    }
+  }
   void recovery_status(bool value) {
     std_msgs::msg::Bool msg;
     msg.data = value;
@@ -72,6 +97,19 @@ public:
       [](CanardInstance *, void * ptr) { std::free(ptr); })),
     queue_(canardTxInit(256, CANARD_MTU_CAN_FD))
   {
+    executor_.add_node(diagnostics_node_);
+    gains_service_ = diagnostics_node_->create_service<SetGains>("/ruka3/set_gains",
+      [this](std::shared_ptr<rmw_request_id_t> header, std::shared_ptr<SetGains::Request> request) {
+        auto response = std::make_shared<SetGains::Response>();
+        response->results.resize(request->parameters.size());
+        if (!tuning_enabled || gain_request_) {
+          for (auto & result : response->results) result.reason =
+            tuning_enabled ? "Another gains request is in progress" : "Hardware is not active";
+          gains_service_->send_response(*header, *response);
+          return;
+        }
+        gain_request_ = GainRequest{header, request, response};
+      });
     canard_.node_id = kControllerNodeId;
     const unsigned index = if_nametoindex(interface.c_str());
     if (!index) throw std::runtime_error("SocketCAN interface not found: " + interface);
@@ -111,7 +149,8 @@ public:
     CanardTransferID id, const void * payload, size_t size)
   {
     const CanardTransferMetadata metadata{CanardPriorityNominal, kind, port, node, id};
-    if (canardTxPush(&queue_, &canard_, micros() + 100000, &metadata, size, payload) < 0) failed = true;
+    const auto result = canardTxPush(&queue_, &canard_, micros() + 100000, &metadata, size, payload);
+    if (result < 0) fail("TX enqueue failed: " + std::to_string(result));
   }
 
   void flush()
@@ -125,10 +164,10 @@ public:
         std::memcpy(frame.data, item->frame.payload, frame.len);
         if (::write(fd_, &frame, sizeof(frame)) != sizeof(frame)) {
           if (errno == EAGAIN || errno == ENOBUFS) return;
-          failed = true;
+          fail(std::string("SocketCAN write: ") + std::strerror(errno));
         }
       } else {
-        failed = true;
+        fail("TX deadline expired, CAN ID=" + std::to_string(item->frame.extended_can_id));
       }
       canard_.memory_free(&canard_, canardTxPop(&queue_, item));
     }
@@ -152,7 +191,7 @@ public:
       canfd_frame raw{};
       const auto size = ::read(fd_, &raw, sizeof(raw));
       if (size < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) failed = true;
+        if (errno != EAGAIN && errno != EWOULDBLOCK) fail(std::string("SocketCAN read: ") + std::strerror(errno));
         break;
       }
       if ((size != CANFD_MTU && size != CAN_MTU) || !(raw.can_id & CAN_EFF_FLAG) ||
@@ -160,7 +199,7 @@ public:
       const CanardFrame frame{raw.can_id & CAN_EFF_MASK, raw.len, raw.data};
       CanardRxTransfer transfer{};
       const auto accepted = canardRxAccept(&canard_, now, &frame, 0, &transfer, nullptr);
-      if (accepted < 0) failed = true;
+      if (accepted < 0) fail("RX accept failed: " + std::to_string(accepted));
       if (accepted == 1) {
         receive(transfer, now);
         canard_.memory_free(&canard_, transfer.payload);
@@ -183,9 +222,8 @@ public:
       command_ids[index]++, data, size);
   }
 
-  // Firmware register responses are our internal ABI: decode the known field directly.
-  bool access(size_t index, const char * name, uavcan_register_Access_Response_1_0 & response,
-    int value = -1)
+  void request_register(size_t index, const char * name, int value = -1,
+    std::optional<float> gain = std::nullopt)
   {
     uavcan_register_Access_Request_1_0 msg{};
     msg.name.name.count = std::strlen(name);
@@ -195,6 +233,11 @@ public:
       msg.value.integer32.value.count = 1;
       msg.value.integer32.value.elements[0] = value;
     }
+    if (gain) {
+      uavcan_register_Value_1_0_select_real32_(&msg.value);
+      msg.value.real32.value.count = 1;
+      msg.value.real32.value.elements[0] = *gain;
+    }
     std::uint8_t data[uavcan_register_Access_Request_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_]{};
     size_t size = sizeof(data);
     uavcan_register_Access_Request_1_0_serialize_(&msg, data, &size);
@@ -203,6 +246,13 @@ public:
     response_ready_ = false;
     send(CanardTransferKindRequest, uavcan_register_Access_1_0_FIXED_PORT_ID_,
       pending_node_, pending_id_, data, size);
+  }
+
+  // Firmware responses are an internal ABI; only activation waits for register RPCs.
+  bool access(size_t index, const char * name, uavcan_register_Access_Response_1_0 & response,
+    int value = -1, std::optional<float> gain = std::nullopt)
+  {
+    request_register(index, name, value, gain);
     const auto deadline = micros() + 500000;
     do {
       poll();
@@ -210,6 +260,70 @@ public:
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     } while (micros() < deadline && !failed);
     return false;
+  }
+
+  // Run on the CAN owner thread. Never wait for an RPC in the control loop.
+  void tune()
+  {
+    executor_.spin_some();
+    if (!gain_request_) return;
+    auto & update = *gain_request_;
+    if (!tuning_enabled || failed) {
+      finish_tuning("Hardware is not active or CAN failed");
+      return;
+    }
+    if (update.waiting) {
+      if (!response_ready_ && micros() < update.deadline) return;
+      auto & result = update.response->results[update.next];
+      if (response_ready_) {
+        const auto actual = response_.value.real32.value.elements[0];
+        result.successful = actual == update.value;
+        if (result.successful) {
+          if (update.name == "kp") kp[update.joint] = actual;
+          if (update.name == "kd") kd[update.joint] = actual;
+          RCLCPP_INFO(diagnostics_node_->get_logger(), "joint_%zu: %s=%g applied",
+            update.joint+1, update.name.c_str(), double(actual));
+        } else result.reason = "Firmware did not accept the requested value";
+      } else result.reason = "CAN register response timed out; application is unconfirmed";
+      update.waiting = false;
+      ++update.next;
+    }
+    while (update.next < update.request->parameters.size()) {
+      const auto & parameter = update.request->parameters[update.next];
+      const auto dot = parameter.name.find('.');
+      const auto joint = parameter.name.substr(0, dot);
+      const auto name = dot == std::string::npos ? "" : parameter.name.substr(dot+1);
+      const auto found = std::find(kJointNames.begin(), kJointNames.end(), joint);
+      // This is the public ROS boundary, not validation of our firmware's internal ABI.
+      if (found == kJointNames.end() || (name != "kp" && name != "kd" && name != "ki") ||
+        parameter.value.type != rcl_interfaces::msg::ParameterType::PARAMETER_DOUBLE ||
+        !std::isfinite(parameter.value.double_value) || parameter.value.double_value < 0 ||
+        !std::isfinite(static_cast<float>(parameter.value.double_value)))
+      {
+        update.response->results[update.next++].reason =
+          "Expected joint_1..joint_6.kp/kd/ki and a finite nonnegative double";
+        continue;
+      }
+      update.joint = std::distance(kJointNames.begin(), found);
+      update.name = name;
+      update.value = parameter.value.double_value;
+      request_register(update.joint, name.c_str(), -1, update.value);
+      update.deadline = micros() + 500000;
+      update.waiting = true;
+      return;
+    }
+    gains_service_->send_response(*update.header, *update.response);
+    gain_request_.reset();
+  }
+
+  void finish_tuning(const std::string & reason)
+  {
+    if (!gain_request_) return;
+    auto & update = *gain_request_;
+    for (size_t i = update.next; i < update.response->results.size(); ++i)
+      update.response->results[i].reason = reason;
+    gains_service_->send_response(*update.header, *update.response);
+    gain_request_.reset();
   }
 
   bool healthy(double feedback_timeout, double heartbeat_timeout) const
@@ -251,6 +365,22 @@ public:
   }
 
 private:
+  using SetGains = rcl_interfaces::srv::SetParameters;
+  struct GainRequest
+  {
+    std::shared_ptr<rmw_request_id_t> header;
+    std::shared_ptr<SetGains::Request> request;
+    std::shared_ptr<SetGains::Response> response;
+    size_t next{}, joint{};
+    std::string name;
+    float value{};
+    std::uint64_t deadline{};
+    bool waiting{};
+  };
+  std::optional<GainRequest> gain_request_;
+  rclcpp::executors::SingleThreadedExecutor executor_;
+  rclcpp::Service<SetGains>::SharedPtr gains_service_;
+
   void receive(const CanardRxTransfer & transfer, std::uint64_t now)
   {
     const auto source = transfer.metadata.remote_node_id;
@@ -345,17 +475,28 @@ CallbackReturn Ruka3System::on_activate(const rclcpp_lifecycle::State &)
       RCLCPP_ERROR(get_logger(), "joint_%zu: zero is outside calibrated soft limits", i+1);
       return CallbackReturn::ERROR;
     }
+    // Each hardware activation starts from the requested startup gains.
+    for (const auto & setting : {std::make_pair("kp", 10.f), std::make_pair("kd", 0.f),
+        std::make_pair("ki", .1f)})
+    {
+      if (!bus_->access(i, setting.first, response, -1, setting.second) ||
+        response.value.real32.value.elements[0] != setting.second)
+      {
+        RCLCPP_ERROR(get_logger(), "joint_%zu: startup %s could not be applied", i+1, setting.first);
+        return CallbackReturn::ERROR;
+      }
+    }
     if (!bus_->access(i, "kp", response)) {
       RCLCPP_ERROR(get_logger(), "joint_%zu: kp read timed out", i+1);
       return CallbackReturn::ERROR;
     }
-    kp_[i] = response.value.real32.value.elements[0];
+    bus_->kp[i] = response.value.real32.value.elements[0];
     if (!bus_->access(i, "kd", response)) {
       RCLCPP_ERROR(get_logger(), "joint_%zu: kd read timed out", i+1);
       return CallbackReturn::ERROR;
     }
-    kd_[i] = response.value.real32.value.elements[0];
-    RCLCPP_INFO(get_logger(), "joint_%zu: firmware Kp=%g Kd=%g", i+1, kp_[i], kd_[i]);
+    bus_->kd[i] = response.value.real32.value.elements[0];
+    RCLCPP_INFO(get_logger(), "joint_%zu: firmware Kp=%g Kd=%g", i+1, bus_->kp[i], bus_->kd[i]);
 
   }
   for (size_t i = 0; i < kJointCount; ++i) {
@@ -371,8 +512,9 @@ CallbackReturn Ruka3System::on_activate(const rclcpp_lifecycle::State &)
   recovery_ = {};
   bus_->recovery_status(false);
   active_ = true;
+  bus_->tuning_enabled = true;
   // Real states remain measured. Only the command is zero; firmware owns the approach profile.
-  for (size_t i = 0; i < kJointCount; ++i) bus_->command(i, 0, 0, kp_[i], kd_[i]);
+  for (size_t i = 0; i < kJointCount; ++i) bus_->command(i, 0, 0, bus_->kp[i], bus_->kd[i]);
   bus_->flush();
   RCLCPP_INFO(get_logger(), "RUKA3 armed: all six targets are zero");
   return CallbackReturn::SUCCESS;
@@ -381,9 +523,11 @@ CallbackReturn Ruka3System::on_activate(const rclcpp_lifecycle::State &)
 void Ruka3System::hold()
 {
   if (!bus_ || !active_) return;
+  bus_->tuning_enabled = false;
+  bus_->finish_tuning("Hardware deactivated");
   // If feedback is stale, let each drive's local watchdog capture its actual position.
   if (!bus_->healthy(feedback_timeout_, heartbeat_timeout_)) { active_ = false; return; }
-  for (size_t i = 0; i < kJointCount; ++i) bus_->command(i, bus_->joints[i].position, 0, kp_[i], kd_[i]);
+  for (size_t i = 0; i < kJointCount; ++i) bus_->command(i, bus_->joints[i].position, 0, bus_->kp[i], bus_->kd[i]);
   bus_->flush();
   active_ = false;
 }
@@ -435,9 +579,14 @@ hardware_interface::return_type Ruka3System::read(const rclcpp::Time &, const rc
     position_[i] = bus_->joints[i].position;
     velocity_[i] = bus_->joints[i].velocity;
   }
+  bus_->tune();
   bus_->diagnostics(active_, feedback_timeout_, heartbeat_timeout_);
-  return active_ && !bus_->healthy(feedback_timeout_, heartbeat_timeout_) ?
-    hardware_interface::return_type::ERROR : hardware_interface::return_type::OK;
+  if (active_ && !bus_->healthy(feedback_timeout_, heartbeat_timeout_)) {
+    bus_->report_unhealthy(feedback_timeout_, heartbeat_timeout_);
+    RCLCPP_ERROR(get_logger(), "Hardware read failed; leaving active state (CAN failed=%d)", bus_->failed);
+    return hardware_interface::return_type::ERROR;
+  }
+  return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type Ruka3System::write(const rclcpp::Time &, const rclcpp::Duration & period)
@@ -454,7 +603,7 @@ hardware_interface::return_type Ruka3System::write(const rclcpp::Time &, const r
     double velocity = recovery_.latched ? recovery_.velocity[i] : command_velocity_[i];
     if (!recovery_.latched && ((target >= j.soft_upper && velocity > 0) ||
       (target <= j.soft_lower && velocity < 0))) velocity = 0;
-    bus_->command(i, target, velocity, kp_[i], kd_[i]);
+    bus_->command(i, target, velocity, bus_->kp[i], bus_->kd[i]);
   }
   bus_->flush();
   return bus_->failed ? hardware_interface::return_type::ERROR : hardware_interface::return_type::OK;

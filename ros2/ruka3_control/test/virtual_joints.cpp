@@ -30,6 +30,8 @@ struct Node {
   CanardTransferID heartbeat_id{}, feedback_id{};
   double position{0.3}, target{0.3}, velocity{};
   bool armed{}, first{true};
+  float kp{}, kd{}, ki{};
+  float packet_kp{-1}, packet_kd{-1};
   void send(CanardTransferKind kind, CanardPortID port, CanardNodeID dest, CanardTransferID tid,
     const void * data, size_t size) {
     CanardTransferMetadata meta{CanardPriorityNominal,kind,port,dest,tid};
@@ -46,7 +48,7 @@ int main(int argc, char ** argv) {
   std::ofstream log(argv[2]);
   std::array<Node,6> nodes;
   for (size_t i=0;i<6;++i) {
-    auto & n=nodes[i]; n.canard.node_id=101+i;
+    auto & n=nodes[i]; n.canard.node_id=101+i; n.kp=30.f+i; n.kd=.01f*i;
     canardRxSubscribe(&n.canard,CanardTransferKindMessage,1121+i,
       voltbro_foc_command_1_0_EXTENT_BYTES_,CANARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,&n.command_sub);
     canardRxSubscribe(&n.canard,CanardTransferKindRequest,384,
@@ -73,10 +75,15 @@ int main(int argc, char ** argv) {
             uavcan_register_Value_1_0_select_integer32_(&response.value);
             response.value.integer32.value.count=5; response.value.integer32.value.elements[0]=n.armed;
             log << "arm " << i << " " << n.armed << std::endl;
-          } else if (name=="kp" || name=="kd") {
+          } else if (name=="kp" || name=="kd" || name=="ki") {
+            auto & gain = name=="kp" ? n.kp : (name=="kd" ? n.kd : n.ki);
+            if (req.value._tag_) {
+              gain=req.value.real32.value.elements[0];
+              log << "gain " << i << " " << name << " " << gain << std::endl;
+            }
             uavcan_register_Value_1_0_select_real32_(&response.value);
             response.value.real32.value.count=1;
-            response.value.real32.value.elements[0]=name=="kp" ? 30.f+i : .01f*i;
+            response.value.real32.value.elements[0]=gain;
           } else if (name=="limits") {
             uavcan_register_Value_1_0_select_real32_(&response.value);
             response.value.real32.value.count=9;
@@ -85,10 +92,16 @@ int main(int argc, char ** argv) {
           }
           uint8_t payload[uavcan_register_Access_Response_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_]{}; size=sizeof(payload);
           uavcan_register_Access_Response_1_0_serialize_(&response,payload,&size);
-          n.send(CanardTransferKindResponse,384,transfer.metadata.remote_node_id,transfer.metadata.transfer_id,payload,size);
+          // Exercise a lost tuning response without interrupting feedback or commands.
+          if (!(name=="ki" && req.value._tag_ && req.value.real32.value.elements[0]==.321f))
+            n.send(CanardTransferKindResponse,384,transfer.metadata.remote_node_id,transfer.metadata.transfer_id,payload,size);
         } else {
           voltbro_foc_command_1_0 cmd{}; voltbro_foc_command_1_0_deserialize_(&cmd,data,&size);
           if (n.first) { log << "first " << i << " " << cmd.angle.radian << " " << cmd.angle_kp.value << " " << cmd.velocity_kp.value << std::endl; n.first=false; }
+          if (n.packet_kp!=cmd.angle_kp.value || n.packet_kd!=cmd.velocity_kp.value) {
+            log << "packet_gains " << i << " " << cmd.angle_kp.value << " " << cmd.velocity_kp.value << std::endl;
+            n.packet_kp=cmd.angle_kp.value; n.packet_kd=cmd.velocity_kp.value;
+          }
           n.target=cmd.angle.radian;
           if (!armed_at) armed_at=time;
         }
@@ -96,14 +109,14 @@ int main(int argc, char ** argv) {
       }
     }
     // Force an external soft-limit excursion after startup, then stop feedback later.
-    if (armed_at && !injected && time-armed_at>4000000) {
+    if (armed_at && !injected && time-armed_at>8000000) {
       nodes[0].position=.9; injected=true; log << "injected" << std::endl;
     }
     for (size_t i=0;i<6;++i) {
       auto & n=nodes[i];
       const auto step=n.armed ? std::clamp(n.target-n.position,-.1*dt,.1*dt) : 0;
       n.position+=step; n.velocity=dt>0 ? step/dt : 0;
-      if (time-last_feedback>=10000 && (!armed_at || time-armed_at<12000000)) {
+      if (time-last_feedback>=10000 && (!armed_at || time-armed_at<16000000)) {
         voltbro_foc_state_simple_1_0 msg{}; msg.angle.radian=n.position; msg.velocity.radian_per_second=n.velocity;
         uint8_t data[voltbro_foc_state_simple_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_]{}; size_t size=sizeof(data);
         voltbro_foc_state_simple_1_0_serialize_(&msg,data,&size); n.send(CanardTransferKindMessage,1001,CANARD_NODE_ID_UNSET,n.feedback_id++,data,size);

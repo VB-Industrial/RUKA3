@@ -143,9 +143,17 @@ inline constexpr CommandTuning kDefaultCommandTuning{
     .calibration_current_limit_a = 1.0F,
     .calibration_velocity_gain_a = 2.0F,
 };
-// J4 retains its smaller integral-current limit; position gains are common.
-inline constexpr CommandTuning kJ4CommandTuning = [] {
+inline constexpr CommandTuning kG474CommandTuning = [] {
     auto tuning = kDefaultCommandTuning;
+    tuning.default_position_kp = 20.0F;
+    tuning.default_position_ki = 2.0F;
+    tuning.default_integral_current_limit_a = 1.0F;
+    return tuning;
+}();
+// J4 uses the G474 position gains.
+
+inline constexpr CommandTuning kJ4CommandTuning = [] {
+    auto tuning = kG474CommandTuning;
     tuning.default_integral_current_limit_a = 1.0F;
     return tuning;
 }();
@@ -160,6 +168,12 @@ inline constexpr CommandTuning kG431CommandTuning = [] {
 }();
 inline constexpr ObserverProfile kDefaultObserverProfile{65536U, 0.1F, 2U, 0.0F};
 inline constexpr ObserverProfile kG474ObserverProfile{16384U, 0.1F, 2U, 0.0F};
+// J1 unloaded transmission must not be driven primarily by its backlash-side encoder.
+inline constexpr ObserverProfile kJ1ObserverProfile = [] {
+    auto observer = kG474ObserverProfile;
+    observer.fusion_encoder_weight = 0.1F;
+    return observer;
+}();
 inline constexpr ObserverProfile kJ4ObserverProfile = [] {
     auto observer = kG474ObserverProfile;
     observer.fusion_encoder_weight = 0.1F;
@@ -187,7 +201,7 @@ inline constexpr MotorProfile kG474MotorProfile{
     // User-selected provisional limits for J1-J4; not verified nameplate ratings.
     .current_limit = 22.0F, .nominal_current = 10.0F, .torque_limit = 10.0F, .max_voltage = 50.0F,
     .stall_current = 10.0F, .stall_timeout_s = 3.0F, .stall_tolerance = 0.2F,
-    .calibration_voltage = 1.0F, .current_pid_kp = 2.0F, .current_pid_ki = 600.0F,
+    .calibration_voltage = 1.0F, .current_pid_kp = 0.035F, .current_pid_ki = 75.0F,
     .current_pid_kd = 0.0F, .filter_expected_a = 0.0F,
     .filter_g1 = 0.015700989410003974F, .filter_g2 = 3.925227776360174F,
     .filter_g3 = 387.54711795263574F, .current_lpf = 0.0925F,
@@ -231,9 +245,9 @@ inline constexpr MotorProfile kG431MotorProfile{
 // This table is the only CAN identity authority for all six joints.
 // Calibration offsets remain in the board-specific persistent record.
 inline constexpr JointProfile kJointProfiles[] = {
-    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
-    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
-    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kDefaultCommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
+    {1, Board::g474, 101, 1001, 1121, 1131, 72.0F, -1, -1, -1, 1205,  1206, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kG474CommandTuning, kJ1ObserverProfile, kDefaultCommunicationProfile},
+    {2, Board::g474, 102, 1001, 1122, 1132, 36.0F, -1, -1,  1,  555, 11000, -1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kG474CommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
+    {3, Board::g474, 103, 1001, 1123, 1133, 36.0F, -1, -1,  1, 1320,  9956,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kG474CommandTuning, kG474ObserverProfile, kDefaultCommunicationProfile},
     {4, Board::g474, 104, 1001, 1124, 1134, 36.0F, -1,  1, -1,16179,  5000,  1, 0.0F, 0.0F,  1, kG474MotorProfile, kDefaultSafetyProfile, kJ4CommandTuning, kJ4ObserverProfile, kDefaultCommunicationProfile},
     {5, Board::g431, 105, 1001, 1125, 1135, 10.0F,  1, -1,  1,    0,     0, -1, 0.0F, 0.0F, -1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kDefaultObserverProfile, kDefaultCommunicationProfile},
     {6, Board::g431, 106, 1001, 1126, 1136, 10.0F,  1,  1,  1,    0, 52076, -1, 0.0F, 0.0F,  1, kG431MotorProfile, kDefaultSafetyProfile, kG431CommandTuning, kJ6ObserverProfile, kDefaultCommunicationProfile},

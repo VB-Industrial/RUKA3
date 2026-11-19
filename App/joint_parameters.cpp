@@ -75,6 +75,8 @@ void update_register_diagnostics(std::uint32_t now) {
     case ParameterId::POSITION_KI: value = joint_motion_instance().position_ki(); return true;
     case ParameterId::INTEGRAL_LIMIT: value = joint_motion_instance().integral_limit(); return true;
     case ParameterId::INTEGRAL_CURRENT: value = joint_motion_instance().integral_current(); return true;
+    case ParameterId::PROFILE_VELOCITY: value = joint_motion_instance().profile_velocity(); return true;
+    case ParameterId::PROFILE_ACCELERATION: value = joint_motion_instance().profile_acceleration(); return true;
     case ParameterId::ACTIVE_GAINS:
         floats[0] = joint_motion_instance().snapshot().kp;
         floats[1] = joint_motion_instance().snapshot().kd;
@@ -190,6 +192,12 @@ void update_register_diagnostics(std::uint32_t now) {
             ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
     case ParameterId::POSITION_KD:
         return joint_motion_instance().set_position_gains(joint_motion_instance().position_kp(), std::get<float>(value))
+            ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    case ParameterId::PROFILE_VELOCITY:
+        return joint_motion_instance().set_profile_velocity(std::get<float>(value))
+            ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
+    case ParameterId::PROFILE_ACCELERATION:
+        return joint_motion_instance().set_profile_acceleration(std::get<float>(value))
             ? ParameterWriteResult::OK : ParameterWriteResult::INVALID;
     case ParameterId::POSITION_KI:
         return joint_motion_instance().set_integral(std::get<float>(value), joint_motion_instance().integral_limit())

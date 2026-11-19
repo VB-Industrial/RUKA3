@@ -23,12 +23,18 @@ struct PIDConfig {
     float min_output = -std::numeric_limits<float>::max();
 };
 
+#ifdef RUKA3_FOC_TRACE
+struct PIDTrace { float raw{},lower{},upper{}; bool saturated{}; };
+#endif
 class PIDRegulator  {
 private:
     float signal = 0.0f;
     float integral_error = 0.0f;
     float prev_error = 0.0f;
     PIDConfig config;
+#ifdef RUKA3_FOC_TRACE
+    PIDTrace trace_{};
+#endif
 protected:
     std::tuple<float, float> get_raw_signal_and_intergal(float error, float dt) {
         float error_diff = error - prev_error;
@@ -64,7 +70,13 @@ public:
         integral_error = std::clamp(new_integral, -config.integral_error_lim, config.integral_error_lim);
     }
 
+#ifdef RUKA3_FOC_TRACE
+    const PIDTrace& trace() const { return trace_; }
+#endif
     void reset() {
+#ifdef RUKA3_FOC_TRACE
+        trace_={};
+#endif
         signal = 0.0F;
         integral_error = 0.0F;
         prev_error = 0.0F;
@@ -89,6 +101,10 @@ public:
                 (raw_signal < config.min_output && config.ki * error > 0.0F)) {
                 integral_error = new_integral_error;
             }
+#ifdef RUKA3_FOC_TRACE
+            trace_={raw_signal,config.min_output,config.max_output,
+                raw_signal<config.min_output || raw_signal>config.max_output};
+#endif
             signal = std::clamp(raw_signal, config.min_output, config.max_output);
         }
         return signal;
@@ -109,6 +125,9 @@ public:
                 (raw_signal < lower_limit && config.ki * error > 0.0F)) {
                 integral_error = new_integral_error;
             }
+#ifdef RUKA3_FOC_TRACE
+            trace_={raw_signal,lower_limit,upper_limit,raw_signal<lower_limit || raw_signal>upper_limit};
+#endif
             signal = std::clamp(raw_signal, lower_limit, upper_limit);
         }
         return signal;

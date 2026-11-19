@@ -36,7 +36,6 @@ private:
   std::unique_ptr<detail::CyphalRuntime> bus_;
   std::string can_interface_{"can0"};
   double activation_timeout_{5.0}, feedback_timeout_{0.25}, heartbeat_timeout_{2.5};
-  std::array<double, kJointCount> kp_{}, kd_{};
   bool active_{};
   LimitRecovery recovery_;
 };

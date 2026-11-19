@@ -2,6 +2,7 @@
 
 #include "tim.h"
 #include "cordic.h"
+#include "foc_trace_hooks.h"
 
 #ifdef ENABLE_CALIBRATION
 #error "Legacy open-loop calibration is not supported by the G474 current commissioning image"
@@ -61,6 +62,9 @@ micros __attribute__((optimize("O0"))) micros_64() {
 
 [[noreturn]] void app() {
     setup_cordic();
+#ifdef RUKA3_FOC_TRACE
+    ruka3_foc_trace_init();
+#endif
 #ifndef ENABLE_CALIBRATION
     setup_cyphal_comms();
     setup_can();

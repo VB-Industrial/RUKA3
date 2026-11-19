@@ -57,10 +57,20 @@ int main() {
     // Dynamic bus/vector limits must clamp the output, not only the integral.
     PIDRegulator limit_test(PIDConfig{.kp = 2.0F, .ki = 600.0F, .max_output = 2.0F, .min_output = -2.0F});
     close(limit_test.regulation(100.0F, 0.0000625F, 0.25F), 0.25F);
+#ifdef RUKA3_FOC_TRACE
+    assert(limit_test.trace().saturated);
+    close(limit_test.trace().upper,0.25F);
+    close(limit_test.trace().lower,-0.25F);
+    close(limit_test.trace().raw,203.75F);
+#endif
     close(limit_test.regulation(-100.0F, 0.0000625F, 0.25F), -0.25F);
     close(limit_test.get_integral_error(), 0.0F);
     close(limit_test.regulation(100.0F, 0.0000625F, 50.0F), 2.0F);
     limit_test.reset();
+#ifdef RUKA3_FOC_TRACE
+    assert(!limit_test.trace().saturated);
+    close(limit_test.trace().raw,0.0F);
+#endif
     close(limit_test.regulation(0.0F, 0.0000625F, 2.0F), 0.0F);
 
     // A saturated integrator can unwind when the error reverses.

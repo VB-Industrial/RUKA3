@@ -4,6 +4,9 @@
 
 #include "foc.hpp"
 #include "fusion_math.hpp"
+#ifdef RUKA3_FOC_TRACE
+#include "foc_trace_hw.hpp"
+#endif
 
 #include "arm_math.h"
 #include "stm32g4xx_ll_cordic.h"
@@ -86,6 +89,15 @@ void FOC::update_angle() {
     }
 
     raw_elec_angle = offset_value * (pi2 / (float)encoder.CPR);
+#ifdef RUKA3_FOC_TRACE
+    if(auto* r=ruka3::foc_trace::frame(ruka3::foc_trace::Profile::angle)) {
+        r->words[12]=raw_value;r->f(13,raw_elec_angle);
+        r->words[27]=static_cast<std::uint32_t>(encoder.electric_offset);
+        r->words[28]=lookup_table?static_cast<std::uint32_t>((*lookup_table)[raw_value>>3]):0;
+        r->words[25]=encoder.CPR;r->words[26]=drive_info.common.ppairs;
+        r->words[29]=(encoder.is_inverted?1U:0U)|(lookup_table?2U:0U);
+    }
+#endif
 }
 
 bool FOC::run_wrapped_kalman(float raw_angle, WrappedKalmanState& state, float& predicted_angle, float& predicted_velocity) {
@@ -122,11 +134,24 @@ bool FOC::run_wrapped_kalman(float raw_angle, WrappedKalmanState& state, float& 
 
     nTh = wrap_0_pi2(nTh);
 
+#ifdef RUKA3_FOC_TRACE
+    const float trace_previous=state.prev_angle;
+#endif
     // (19)
     state.theta_hat = nTh + filters_config.g1 * travel;
     state.omega_hat = nW + filters_config.g2 * travel;
     state.epsilon_hat = nE + filters_config.g3 * travel;
 //#pragma endregion KALMAN_PAPER
+#ifdef RUKA3_FOC_TRACE
+    if(&state==&motor_kalman_state) {
+        if(auto* r=ruka3::foc_trace::frame(ruka3::foc_trace::Profile::angle)) {
+            r->words[10]|=ruka3::foc_trace::observer_valid;
+            r->f(14,nTh);r->f(15,state.theta_hat);r->f(16,state.omega_hat);
+            r->f(17,state.epsilon_hat);r->f(18,nW);r->f(20,travel);r->f(21,trace_previous);
+            r->f(22,T);r->f(30,filters_config.g1);r->f(31,filters_config.g2);
+        }
+    }
+#endif
     predicted_angle = nTh;
     predicted_velocity = nW;
     state.prev_angle = nTh;
@@ -260,6 +285,15 @@ void FOC::update_sensors() {
 
 
 void FOC::update() {
+#ifdef RUKA3_FOC_TRACE
+    namespace trace=ruka3::foc_trace;
+    if(auto* r=trace::recorder.current()) {
+        r->words[10]|=(is_on()?trace::pwm_on:0U)|(static_cast<std::uint32_t>(point_type)<<1U);
+    }
+    if(auto* r=trace::frame(trace::Profile::control)) {
+        for(unsigned i=12;i<29;++i) r->f(i,std::numeric_limits<float>::quiet_NaN());
+    }
+#endif
 #ifdef FOC_PROFILE
     const uint32_t start_total = DWT->CYCCNT;
     uint32_t t_start = DWT->CYCCNT;
@@ -276,10 +310,25 @@ void FOC::update() {
     LL_CORDIC_WriteData(CORDIC, ElecTheta_q31);
 
     // the values are negative to level out [-pi, pi] representation of electrical angle at the CORDIC input
+#ifdef RUKA3_FOC_TRACE
+    const std::uint32_t trace_cos=LL_CORDIC_ReadData(CORDIC);
+    const std::uint32_t trace_sin=LL_CORDIC_ReadData(CORDIC);
+    struct {int32_t cosOutput;int32_t sinOutput;} elec_angles_q31{
+        -(int32_t)trace_cos,-(int32_t)trace_sin}; // Original boundary arithmetic intentionally retained.
+    if(auto* r=trace::recorder.current()) {
+        if(trace_cos==0x80000000U || trace_sin==0x80000000U) r->words[10]|=trace::cordic_min;
+        if(trace::recorder.profile()==trace::Profile::angle) {
+            r->words[23]=trace_cos;r->words[24]=trace_sin;r->f(19,elec_angle);
+        } else if(trace::recorder.profile()==trace::Profile::measurement) {
+            r->words[30]=encoder.get_value();r->f(31,elec_angle);
+        }
+    }
+#else
     struct {
         int32_t cosOutput = -(int32_t)LL_CORDIC_ReadData(CORDIC);  // Read cosine
         int32_t sinOutput = -(int32_t)LL_CORDIC_ReadData(CORDIC);  // Read sine
     } elec_angles_q31;
+#endif
     struct {
         float c;
         float s;
@@ -301,6 +350,12 @@ void FOC::update() {
 
     I_D = I_D - (filters_config.I_lpf_coefficient * diff_D);
     I_Q = I_Q - (filters_config.I_lpf_coefficient * diff_Q);
+#ifdef RUKA3_FOC_TRACE
+    if(auto* r=trace::frame(trace::Profile::measurement)) {
+        r->f(20,tempD);r->f(21,tempQ);r->f(22,I_D);r->f(23,I_Q);
+    }
+    if(auto* r=trace::frame(trace::Profile::control)) {r->f(17,I_D);r->f(18,I_Q);}
+#endif
     #ifdef FOC_PROFILE
     foc_profile.currents = DWT->CYCCNT - t_start;
     #endif
@@ -315,7 +370,12 @@ void FOC::update() {
     shaft_torque = drive_info.current_direction * I_Q * drive_info.torque_const * gear_ratio_f;
 
     // Keep measuring while disarmed, but never integrate errors or write PWM.
-    if (!is_on()) return;
+    if (!is_on()) {
+#ifdef RUKA3_FOC_TRACE
+        trace::d_pulse.cancel();
+#endif
+        return;
+    }
     if (!(busV > 0.0F)) {
         current_fault = CurrentLoopFault::invalid_bus_voltage;
         stop();
@@ -330,9 +390,16 @@ void FOC::update() {
     }
     const float available_voltage = std::min(voltage_limit, busV * drive_info.modulation_voltage_ratio);
 
+#ifdef RUKA3_FOC_TRACE
+    if(point_type!=SetPointType::VOLTAGE || target!=0.0F) trace::d_pulse.cancel();
+#endif
     if (point_type == SetPointType::VOLTAGE) {
         V_d = 0;
         V_q = target;
+#ifdef RUKA3_FOC_TRACE
+        const auto pulse_flags=trace::d_pulse.step(V_d,V_q);
+        if(auto* r=trace::recorder.current()) r->words[10]|=pulse_flags;
+#endif
     }
     else {
         #ifndef MONITOR
@@ -385,6 +452,9 @@ void FOC::update() {
             i_q_set = controller_response;
         }
 
+#ifdef RUKA3_FOC_TRACE
+        if(auto* r=trace::frame(trace::Profile::control)) r->f(13,i_q_set*drive_info.current_direction);
+#endif
         const float abs_max_current_from_torque = (drive_info.max_torque / drive_info.torque_const / gear_ratio_f);
         if (fabs(i_q_set) > fabs(abs_max_current_from_torque)) {
             i_q_set = copysign(abs_max_current_from_torque, i_q_set);
@@ -408,11 +478,28 @@ void FOC::update() {
             available_voltage * available_voltage - V_d * V_d));
         q_response = q_reg.regulation(i_q_error, T, q_voltage_limit);
         V_q = q_response;
+#ifdef RUKA3_FOC_TRACE
+        if(auto* r=trace::frame(trace::Profile::control)) {
+            r->words[10]|=trace::current_loop_ran;
+            if(d_reg.trace().saturated) r->words[10]|=trace::d_saturated;
+            if(q_reg.trace().saturated) r->words[10]|=trace::q_saturated;
+            r->f(12,0);r->f(14,i_q_set);r->f(15,i_d_error);r->f(16,i_q_error);
+            r->f(19,d_reg.trace().raw);r->f(20,q_reg.trace().raw);
+            r->f(21,V_d);r->f(22,V_q);r->f(25,available_voltage);r->f(26,q_voltage_limit);
+            r->f(27,d_reg.get_integral_error());r->f(28,q_reg.get_integral_error());
+        }
+#endif
         #ifdef FOC_PROFILE
         foc_profile.outer_loop = DWT->CYCCNT - t_start;
         #endif
     }
 
+#ifdef RUKA3_FOC_TRACE
+    if(auto* r=trace::frame(trace::Profile::control)) {
+        if(V_d*V_d+V_q*V_q>available_voltage*available_voltage) r->words[10]|=trace::vector_limited;
+        r->f(25,available_voltage);
+    }
+#endif
     #if defined(MONITOR)
     float V_d_local = V_d;
     float V_q_local = V_q;
@@ -447,7 +534,18 @@ void FOC::update() {
     DQs[1] = (uint16_t)(float(full_pwm + 1) * dtc_v);
     DQs[2] = (uint16_t)(float(full_pwm + 1) * dtc_w);
 
+#ifdef RUKA3_FOC_TRACE
+    if(auto* r=trace::frame(trace::Profile::control)) {
+        if(DQs[0]>drive_info.max_pwm_ticks || DQs[1]>drive_info.max_pwm_ticks || DQs[2]>drive_info.max_pwm_ticks) r->words[10]|=trace::pwm_clipped;
+        r->f(23,V_d);r->f(24,V_q);r->f(31,busV);
+    }
+#endif
     set_pwm();
+#ifdef RUKA3_FOC_TRACE
+    if(auto* r=trace::frame(trace::Profile::control)) {
+        r->words[29]=trace::pack16(DQs[0],DQs[1]);r->words[30]=DQs[2];
+    }
+#endif
     #ifdef FOC_PROFILE
     foc_profile.pwm = DWT->CYCCNT - t_start;
     #endif

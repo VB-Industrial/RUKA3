@@ -20,6 +20,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32g4xx_it.h"
+#include "foc_trace_hooks.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 /* USER CODE END Includes */
@@ -223,7 +224,13 @@ void TIM1_UP_TIM16_IRQHandler(void)
   /* USER CODE BEGIN TIM1_UP_TIM16_IRQn 0 */
 
   /* USER CODE END TIM1_UP_TIM16_IRQn 0 */
+#ifdef RUKA3_FOC_TRACE
+  ruka3_foc_trace_irq_begin();
+#endif
   HAL_TIM_IRQHandler(&htim1);
+#ifdef RUKA3_FOC_TRACE
+  ruka3_foc_trace_irq_end();
+#endif
   /* USER CODE BEGIN TIM1_UP_TIM16_IRQn 1 */
 
   /* USER CODE END TIM1_UP_TIM16_IRQn 1 */
